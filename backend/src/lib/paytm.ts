@@ -324,15 +324,23 @@ export async function fetchBharatpeTransactions(cfg: PaytmConfig): Promise<Bhara
   if (merchantId && !requestUrl.searchParams.has("merchantId"))
     requestUrl.searchParams.set("merchantId", merchantId);
   // The default endpoint is the "PAYMENT_QR" module's transaction history,
-  // scoped to a date range — default to the last 2 days if not already set
+  // scoped to a date range — default to the last 3 days if not already set
   // (an admin-overridden api_url may not need/want these, so only fill gaps).
   if (!requestUrl.searchParams.has("module")) requestUrl.searchParams.set("module", "PAYMENT_QR");
   if (!requestUrl.searchParams.has("sDate") || !requestUrl.searchParams.has("eDate")) {
+    // BharatPe's dashboard dates are India-local (IST, UTC+5:30), not UTC —
+    // slicing a plain UTC ISO string to YYYY-MM-DD lags a full calendar day
+    // behind BharatPe's "today" for the ~5.5h/day IST has already rolled
+    // over past midnight while UTC hasn't, causing today's own payments to
+    // fall just outside the requested range and get silently missed. Shift
+    // into IST before taking the date part so "today"/"eDate" actually means
+    // the same calendar day BharatPe means.
+    const IST_OFFSET_MS = 5.5 * 60 * 60_000;
     const now = new Date();
-    const start = new Date(now.getTime() - 2 * 24 * 60 * 60_000);
-    const ymd = (d: Date) => d.toISOString().slice(0, 10);
-    requestUrl.searchParams.set("sDate", ymd(start));
-    requestUrl.searchParams.set("eDate", ymd(now));
+    const start = new Date(now.getTime() - 3 * 24 * 60 * 60_000);
+    const ymdIst = (d: Date) => new Date(d.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10);
+    requestUrl.searchParams.set("sDate", ymdIst(start));
+    requestUrl.searchParams.set("eDate", ymdIst(now));
   }
   let res: Response;
   try {
@@ -404,14 +412,15 @@ export async function fetchBharatpeTransactions(cfg: PaytmConfig): Promise<Bhara
     .filter((t) => t.amount > 0);
 }
 
-/** Finds a successful BharatPe credit whose amount matches the pending session exactly. */
-export async function findBharatpeCredit(
-  cfg: PaytmConfig,
+/** Pure matcher — pulled out of findBharatpeCredit so a reconcile sweep can
+ * fetch the transaction list once and check it against many pending
+ * sessions, instead of one BharatPe API call per session. */
+export function matchBharatpeTxn(
+  txns: BharatpeTxn[],
   amount: number,
   createdAt?: string,
   expectedUtr?: string,
 ) {
-  const txns = await fetchBharatpeTransactions(cfg);
   const wantedUtr = String(expectedUtr ?? "")
     .replace(/\W/g, "")
     .toLowerCase();
@@ -429,6 +438,17 @@ export async function findBharatpeCredit(
     return !Number.isFinite(txnTime) || txnTime >= sessionStart;
   });
   return hit ?? null;
+}
+
+/** Finds a successful BharatPe credit whose amount matches the pending session exactly. */
+export async function findBharatpeCredit(
+  cfg: PaytmConfig,
+  amount: number,
+  createdAt?: string,
+  expectedUtr?: string,
+) {
+  const txns = await fetchBharatpeTransactions(cfg);
+  return matchBharatpeTxn(txns, amount, createdAt, expectedUtr);
 }
 
 export async function saveBharatpeTokenStatus(status: BharatpeTokenStatus, message: string) {

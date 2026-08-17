@@ -780,6 +780,33 @@ adminRouter.get("/users/:id", async (req, res) => {
   }
 });
 
+// A specific user's full wallet ledger (deposits, purchases, refunds,
+// bonuses, admin adjustments) — the user-facing GET /api/wallet/transactions
+// equivalent, for the admin User detail page's Wallet tab.
+adminRouter.get("/users/:id/wallet-transactions", async (req, res) => {
+  try {
+    const tx = await col<{
+      _id: string; userId: string; type: string; amount: number; balanceAfter: number | null;
+      method?: string | null; note?: string | null; referenceId?: string | null; createdAt: Date;
+    }>("wallet_tx");
+    const rows = await tx.find({ userId: req.params.id }).sort({ createdAt: -1 }).limit(300).toArray();
+    res.json(
+      rows.map((x) => ({
+        id: x._id,
+        type: x.type,
+        amount: Number(x.amount),
+        balanceAfter: x.balanceAfter != null ? Number(x.balanceAfter) : null,
+        method: x.method ?? "",
+        note: x.note ?? "",
+        referenceId: x.referenceId ?? "",
+        createdAt: x.createdAt.toISOString(),
+      })),
+    );
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
 adminRouter.get("/countries", async (_req, res) => {
   try {
     const c = await col<{
@@ -974,20 +1001,42 @@ adminRouter.get("/deposits", async (req, res) => {
 
 adminRouter.post("/deposits/:id/approve", async (req, res) => {
   try {
+    const deposits = await col<{ _id: string; userId: string; amount: number; method: string; utr?: string | null }>("deposits");
+    const depositBefore = await deposits.findOne({ _id: req.params.id });
     const { approveDeposit } = await import("../lib/db/wallet.ts");
     const newBalance = await approveDeposit(req.params.id, req.auth.userId);
     // If this deposit came from the Paytm/BharatPe QR "submitted UTR, awaiting
-    // review" fallback, flip its session to "paid" too — otherwise the
-    // deposit page keeps polling a session stuck on "utr_submitted" forever
-    // even though the wallet was just credited.
+    // review" fallback, flip its session to "paid" too (with the same UTR as
+    // txnId, so the reconcile sweep's duplicate-transaction guard sees it) —
+    // otherwise the deposit page keeps polling a session stuck on
+    // "utr_submitted" forever even though the wallet was just credited.
     try {
-      const sessions = await col<{ _id: string; depositId?: string | null; status: string }>("paytm_sessions");
+      const sessions = await col<{ _id: string; depositId?: string | null; status: string; txnId?: string | null }>("paytm_sessions");
       await sessions.updateOne(
         { depositId: req.params.id },
-        { $set: { status: "paid", creditedAt: new Date() } },
+        { $set: { status: "paid", txnId: depositBefore?.utr || req.params.id, creditedAt: new Date() } },
       );
     } catch {
       /* best-effort — the credit itself already succeeded */
+    }
+    // Best-effort admin-visible payment log — mirrors what auto-credit
+    // (creditPaytmSession) already logs, so a manually-approved deposit
+    // shows up on the Payments history page too, not just auto-credited ones.
+    if (depositBefore) {
+      try {
+        const payments = await col("payments");
+        await payments.insertOne({
+          _id: crypto.randomUUID(),
+          userId: depositBefore.userId,
+          method: depositBefore.method,
+          amount: Number(depositBefore.amount),
+          status: "completed",
+          reference: depositBefore.utr || req.params.id,
+          createdAt: new Date(),
+        } as never);
+      } catch {
+        /* best-effort */
+      }
     }
     res.json({ ok: true, new_balance: newBalance });
   } catch (err) {

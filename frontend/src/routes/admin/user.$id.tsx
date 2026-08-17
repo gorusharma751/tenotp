@@ -11,10 +11,22 @@ import { api } from "@/lib/apiClient";
 import { money, dateShort, dateTime, timeAgo } from "@/utils/format";
 import type { AdminUser, AdminOrder } from "@/types";
 
+interface WalletTx {
+  id: string;
+  type: string;
+  amount: number;
+  balanceAfter: number | null;
+  method: string;
+  note: string;
+  referenceId: string;
+  createdAt: string;
+}
+
 export default function Detail() {
   const { id } = useParams({ strict: false }) as { id: string };
   const u = useQuery({ queryKey: ["admin", "user", id], queryFn: () => api.get<AdminUser>(`/api/admin/users/${id}`) });
   const orders = useQuery({ queryKey: ["admin", "orders"], queryFn: () => api.get<AdminOrder[]>("/api/admin/orders") });
+  const walletTx = useQuery({ queryKey: ["admin", "user", id, "wallet-transactions"], queryFn: () => api.get<WalletTx[]>(`/api/admin/users/${id}/wallet-transactions`) });
   const user = u.data;
 
   return (
@@ -62,7 +74,15 @@ export default function Detail() {
               ]} />
             </TabsContent>
             <TabsContent value="wallet"><Card className="shadow-soft"><CardHeader><CardTitle>Current balance</CardTitle></CardHeader><CardContent className="text-3xl font-bold">{money(user?.wallet ?? 0)}</CardContent></Card></TabsContent>
-            <TabsContent value="tx"><Card className="shadow-soft"><CardContent className="p-6 text-sm text-muted-foreground">Transactions feed — hydrated from API.</CardContent></Card></TabsContent>
+            <TabsContent value="tx">
+              <AdminTable rows={walletTx.data ?? []} empty="No wallet transactions yet" columns={[
+                { key: "t", header: "Type", cell: (t: WalletTx) => <span className="capitalize">{t.type}</span> },
+                { key: "a", header: "Amount", cell: (t: WalletTx) => <span className={`tabular-nums font-medium ${t.amount >= 0 ? "text-success" : "text-destructive"}`}>{t.amount >= 0 ? "+" : ""}{money(t.amount)}</span> },
+                { key: "b", header: "Balance after", cell: (t: WalletTx) => <span className="tabular-nums text-muted-foreground">{t.balanceAfter != null ? money(t.balanceAfter) : "—"}</span> },
+                { key: "n", header: "Note", cell: (t: WalletTx) => <span className="text-xs">{t.note || t.method || "—"}</span> },
+                { key: "d", header: "Date", cell: (t: WalletTx) => <span className="text-xs">{dateTime(t.createdAt)}</span> },
+              ]} />
+            </TabsContent>
             <TabsContent value="api"><Card className="shadow-soft"><CardContent className="p-6 text-sm text-muted-foreground">API usage per hour / day / month.</CardContent></Card></TabsContent>
             <TabsContent value="timeline"><Card className="shadow-soft"><CardContent className="p-6 space-y-3 text-sm">
               {["Logged in from 192.168.1.14", "Purchased WhatsApp OTP", "Deposit received via Card", "Refund requested for ord_1012", "Password changed"].map((e, i) => (

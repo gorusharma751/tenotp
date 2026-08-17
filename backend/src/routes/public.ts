@@ -203,38 +203,108 @@ publicRouter.post("/sync-grizzly", async (req, res) => {
   }
 });
 
-// Keep-alive ping for the BharatPe dashboard session token. BharatPe issues
-// unofficial, session-style access tokens (there's no documented long-lived
-// API key) that appear to expire from inactivity — a periodic real request
-// using the token may keep it alive longer than it would otherwise last.
-// This does NOT prevent expiry forever (BharatPe could still time it out on
-// their side regardless), it just exercises the token regularly instead of
-// letting it sit idle. Schedule an external cron hitting this every 5-10
-// minutes with `x-cron-secret: $CRON_SECRET` — the same hit conveniently
-// also keeps a free-tier Render backend from spinning down on inactivity.
-publicRouter.post("/bharatpe-keepalive", async (req, res) => {
+// BharatPe reconcile sweep — one BharatPe API call that does two jobs:
+//  1. Keep-alive: BharatPe issues unofficial, session-style access tokens
+//     (no documented long-lived API key) that appear to expire from
+//     inactivity — a periodic real request may keep it alive longer than
+//     it otherwise would. Doesn't guarantee it never expires; BharatPe can
+//     still invalidate it server-side regardless.
+//  2. Auto-credit sweep: every still-open BharatPe QR session (pending, or
+//     "UTR submitted, awaiting review" because auto-verify missed it the
+//     first time — see POST /paytm/submit-utr) gets re-checked against this
+//     same fetched transaction list and auto-credited on a match, so a
+//     payment that lands on BharatPe's side a few seconds late still gets
+//     credited automatically instead of sitting in the admin Deposits page
+//     forever waiting for a human click.
+// Schedule an external cron hitting this every 2-5 minutes with
+// `x-cron-secret: $CRON_SECRET` — the same hit conveniently also keeps a
+// free-tier Render backend from spinning down on inactivity.
+publicRouter.post("/bharatpe-reconcile", async (req, res) => {
   if (!checkCronSecret(req)) return res.status(401).json({ error: "unauthorized" });
   try {
-    const { loadBharatpeConfig, fetchBharatpeTransactions, saveBharatpeTokenStatus } = await import(
-      "../lib/paytm.ts"
-    );
+    const { loadBharatpeConfig, fetchBharatpeTransactions, saveBharatpeTokenStatus, matchBharatpeTxn } =
+      await import("../lib/paytm.ts");
     const cfg = await loadBharatpeConfig();
     if (!cfg.enabled || !cfg.access_token) {
       return res.json({ ok: true, skipped: "BharatPe not enabled or no token configured" });
     }
+
+    let txns;
     try {
-      const txns = await fetchBharatpeTransactions(cfg);
-      await saveBharatpeTokenStatus("working", `Keep-alive ping ok · ${txns.length} recent transactions`);
-      res.json({ ok: true, status: "working", count: txns.length });
+      txns = await fetchBharatpeTransactions(cfg);
+      await saveBharatpeTokenStatus("working", `Reconcile ping ok · ${txns.length} recent transactions`);
     } catch (err) {
       const { BharatpeApiError } = await import("../lib/paytm.ts");
       const status = err instanceof BharatpeApiError ? err.status : "unavailable";
-      const message = err instanceof Error ? err.message : "Keep-alive ping failed";
+      const message = err instanceof Error ? err.message : "Reconcile ping failed";
       await saveBharatpeTokenStatus(status, message);
-      res.json({ ok: false, status, message });
+      return res.json({ ok: false, status, message, credited: 0 });
     }
+
+    const sessions = await getCollection<import("../lib/paytm.ts").PaytmSessionDoc>("paytm_sessions");
+    const lookback = new Date(Date.now() - 24 * 60 * 60_000); // ignore anything ancient
+    const openSessions = await sessions
+      .find({ provider: "bharatpe", status: { $in: ["pending", "utr_submitted"] }, createdAt: { $gte: lookback } })
+      .toArray();
+
+    // Guard against crediting the same real-world BharatPe transaction to
+    // more than one session/deposit — two different pending sessions can
+    // easily land on the same paise-rounded amount (e.g. two ₹10.01 QRs
+    // where only one was ever actually paid), and matchBharatpeTxn alone
+    // has no way to know a UTR was already claimed. Anything already used
+    // by a paid session or an approved deposit is off-limits, and once a
+    // UTR is claimed *in this run* it's off-limits for the rest of the loop
+    // too — one bank transaction can only ever settle one order.
+    const txnUtrs = txns.map((t) => t.utr).filter(Boolean);
+    const depositsCol = await getCollection<{ _id: string; status: string; utr: string | null }>("deposits");
+    const [paidWithUtr, approvedDeposits] = await Promise.all([
+      txnUtrs.length ? sessions.find({ status: "paid", txnId: { $in: txnUtrs } }).toArray() : Promise.resolve([]),
+      txnUtrs.length ? depositsCol.find({ status: "approved", utr: { $in: txnUtrs } }).toArray() : Promise.resolve([]),
+    ]);
+    const usedUtrs = new Set<string>([
+      ...paidWithUtr.map((s) => s.txnId).filter((v): v is string => Boolean(v)),
+      ...approvedDeposits.map((d) => d.utr).filter((v): v is string => Boolean(v)),
+    ]);
+
+    const { creditPaytmSession } = await import("../lib/paytm.ts");
+    const { approveDeposit } = await import("../lib/db/wallet.ts");
+    let credited = 0;
+    const errors: string[] = [];
+    for (const s of openSessions) {
+      const hit = matchBharatpeTxn(txns, Number(s.amount), s.createdAt.toISOString(), s.utr ?? undefined);
+      if (!hit) continue;
+      const claimKey = hit.utr || s.orderId;
+      if (usedUtrs.has(claimKey)) {
+        errors.push(`${s.orderId}: transaction ${claimKey} already credited to a different order, skipped`);
+        continue;
+      }
+      try {
+        if (s.status === "utr_submitted" && s.depositId) {
+          // A deposit record already exists for this session (created when
+          // the user submitted their UTR) — approve that one instead of
+          // going through creditPaytmSession, which would insert a second,
+          // duplicate deposit and leave the original orphaned as "pending".
+          await approveDeposit(s.depositId, "system:bharatpe-reconcile");
+          await sessions.updateOne(
+            { _id: s._id },
+            { $set: { status: "paid", txnId: claimKey, creditedAt: new Date() } },
+          );
+        } else {
+          await creditPaytmSession(s._id, claimKey, `BharatPe auto-credit (reconcile) · UTR ${claimKey}`);
+        }
+        usedUtrs.add(claimKey);
+        credited++;
+      } catch (err) {
+        // Already credited by a concurrent check-qr poll, or the deposit
+        // was already approved/rejected by an admin in the meantime — fine,
+        // just skip it.
+        errors.push(`${s.orderId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    res.json({ ok: true, status: "working", txnCount: txns.length, checked: openSessions.length, credited, errors });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Keep-alive failed" });
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Reconcile failed" });
   }
 });
 
