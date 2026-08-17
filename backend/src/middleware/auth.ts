@@ -1,0 +1,46 @@
+import type { Request, Response, NextFunction } from "express";
+import { verifySessionToken, type SessionClaims } from "../lib/auth/jwt.ts";
+
+// Augment Express's Request with the auth context every route handler reads.
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace Express {
+    interface Request {
+      auth: { userId: string; email: string; roles: string[] };
+    }
+  }
+}
+
+function claimsFrom(req: Request): SessionClaims | null {
+  const header = req.headers.authorization;
+  if (!header?.startsWith("Bearer ")) return null;
+  const token = header.slice("Bearer ".length).trim();
+  if (!token) return null;
+  return verifySessionToken(token);
+}
+
+/** Throws 401 if not logged in. */
+export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const claims = claimsFrom(req);
+  if (!claims) return res.status(401).json({ error: "Unauthorized: No valid session" });
+  req.auth = { userId: claims.sub, email: claims.email, roles: claims.roles };
+  next();
+}
+
+/** Like requireAuth, but also 403s unless the session has the "admin" role. */
+export function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const claims = claimsFrom(req);
+  if (!claims) return res.status(401).json({ error: "Unauthorized: No valid session" });
+  if (!claims.roles.includes("admin")) return res.status(403).json({ error: "Forbidden" });
+  req.auth = { userId: claims.sub, email: claims.email, roles: claims.roles };
+  next();
+}
+
+/** Never rejects — req.auth.userId is "" for guests. Use for endpoints that
+ * should gracefully return empty results instead of erroring for logged-out
+ * visitors (mirrors the old optionalAuth TanStack middleware). */
+export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  const claims = claimsFrom(req);
+  req.auth = { userId: claims?.sub ?? "", email: claims?.email ?? "", roles: claims?.roles ?? [] };
+  next();
+}

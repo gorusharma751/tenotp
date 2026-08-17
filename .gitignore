@@ -1,0 +1,13 @@
+# This is a two-package repo — backend/ and frontend/ each have their own
+# .gitignore too (node_modules, .env, build output). This root file only
+# covers editor/OS cruft that can appear anywhere.
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.log

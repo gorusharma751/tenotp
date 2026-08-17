@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash([ -s \"$f\" ])",
+      "Bash(grep -E 'src/api/providers\\\\.ts|src/api/providerLogs\\\\.ts|src/api/providerCatalog\\\\.ts|src/api/priceRules\\\\.ts|src/api/syncJobs\\\\.ts|gourav-ankit-adi\\\\.smoke-test|gourav-ankit-adi\\\\.services|gourav-ankit-adi\\\\.providers\\\\.$id\\\\.settings|gourav-ankit-adi\\\\.pricing|gourav-ankit-adi\\\\.coupons|gourav-ankit-adi\\\\.countries' C:/Users/Gaurav/AppData/Local/Temp/claude/d--Porsnoal-project-ten-otp-letest/f6ed9793-4d9c-430f-a67c-7f8b0936fde7/scratchpad/tsc_full2.txt)",
+      "Bash(\"/d/Porsnoal project/ten otp letest/node_modules/.bin/tsc\" -p tsconfig.json --noEmit)",
+      "Bash(node --experimental-strip-types --check src/routes/admin.ts)",
+      "Bash(cd \"D:/Porsnoal project/ten otp letest/frontend\" && cat package.json | grep -A2 '\"lint\"'; ls ../eslint.config.js; find . -maxdepth 1 -iname \"eslint.config*\")",
+      "Read(//d/Porsnoal project/**)",
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
+      "Bash(grep -n 'to=\"/countries/\\\\$countryCode\"' countries.tsx)",
+      "Bash(grep -vE '^\\(login|index|providers\\\\.\\\\$id\\\\.sync\\)$')",
+      "Bash(sed -i 's/params={{ countryCode: c\\\\.code }}/params={{ countryCode: c.code } as any}/g' src/routes/public/countries.tsx src/routes/public/index.tsx 'src/routes/public/services.$serviceId.tsx')",
+      "Bash(sed -i 's/params={{ serviceId: svc\\\\.id }}/params={{ serviceId: svc.id } as any}/g' src/routes/public/services.tsx)",
+      "Read(//d/Porsnoal project/ten otp letest/src/routes/public/**)"
+    ]
+  }
+}

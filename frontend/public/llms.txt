@@ -1,0 +1,22 @@
+# TenOTP
+
+> Global virtual numbers and OTP delivery for developers and businesses — receive SMS verification codes for WhatsApp, Telegram, Google, and 2,700+ services across 200+ countries.
+
+TenOTP is a carrier-grade OTP verification platform. Users buy short-term virtual phone numbers to receive one-time passwords for account signup and verification on popular apps, or rent long-term numbers via the developer API.
+
+## Pages
+
+- [Home](/): Overview of TenOTP virtual numbers and OTP delivery.
+- [Services](/services): Browse supported services (WhatsApp, Telegram, Google, and more).
+- [Countries](/countries): Countries with available virtual numbers.
+- [Pricing](/pricing): Per-number pricing and wallet top-up details.
+- [Developer API](/api): REST API and SDKs for buying numbers and receiving OTPs.
+- [FAQ](/faq): Common questions about virtual numbers, OTP delivery, and refunds.
+- [Blog](/blog): Product updates and integration guides.
+- [About](/about): About the TenOTP team and platform.
+- [Contact](/contact): Support and sales contact.
+
+## Optional
+
+- [Privacy Policy](/privacy-policy)
+- [Terms](/terms)

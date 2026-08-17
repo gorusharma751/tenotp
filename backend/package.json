@@ -1,0 +1,29 @@
+{
+  "name": "tenotp-backend",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "scripts": {
+    "dev": "node --env-file=.env --experimental-strip-types --watch src/index.ts",
+    "start": "node --env-file=.env --experimental-strip-types src/index.ts",
+    "db:indexes": "node --env-file=.env --experimental-strip-types scripts/ensure-indexes.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "mongodb": "^7.5.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.16.5",
+    "typescript": "^5.8.3"
+  }
+}
