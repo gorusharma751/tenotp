@@ -4,6 +4,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { signIn } from "@/lib/auth";
@@ -31,7 +32,7 @@ export default function Login() {
         <div><Label htmlFor="email">Email</Label><Input id="email" type="email" placeholder="you@example.com" {...register("email")} />{errors.email && <p className="mt-1 text-xs text-destructive">{errors.email.message}</p>}</div>
         <div>
           <div className="flex items-center justify-between"><Label htmlFor="password">Password</Label><Link to="/forgot-password" className="text-xs text-primary hover:underline">Forgot?</Link></div>
-          <Input id="password" type="password" placeholder="••••••••" {...register("password")} />
+          <PasswordInput id="password" placeholder="••••••••" {...register("password")} />
           {errors.password && <p className="mt-1 text-xs text-destructive">{errors.password.message}</p>}
         </div>
         <Button type="submit" disabled={isSubmitting} className="w-full gradient-brand">Sign in</Button>

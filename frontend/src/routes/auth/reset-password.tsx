@@ -3,7 +3,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { updatePassword } from "@/lib/auth";
@@ -37,14 +37,14 @@ export default function ResetPassword() {
       >
         <div>
           <Label htmlFor="password">New password</Label>
-          <Input id="password" type="password" {...register("password")} />
+          <PasswordInput id="password" {...register("password")} />
           {errors.password && (
             <p className="mt-1 text-xs text-destructive">{errors.password.message}</p>
           )}
         </div>
         <div>
           <Label htmlFor="confirm">Confirm password</Label>
-          <Input id="confirm" type="password" {...register("confirm")} />
+          <PasswordInput id="confirm" {...register("confirm")} />
           {errors.confirm && (
             <p className="mt-1 text-xs text-destructive">{errors.confirm.message}</p>
           )}
