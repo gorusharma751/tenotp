@@ -157,7 +157,7 @@ export async function refundOrder(orderId: string, reason: string): Promise<numb
   });
 }
 
-export async function approveDeposit(depositId: string): Promise<number> {
+export async function approveDeposit(depositId: string, approvedBy?: string): Promise<number> {
   return withMoneyTransaction(async (session) => {
     const deposits = await getCollection<{ _id: string; userId: string; amount: number; status: string }>("deposits");
     const deposit = await deposits.findOne({ _id: depositId }, { session });
@@ -170,13 +170,30 @@ export async function approveDeposit(depositId: string): Promise<number> {
     const newBalance = Number((Number(user.walletBalance) + Number(deposit.amount)).toFixed(2));
 
     await users.updateOne({ _id: deposit.userId }, { $set: { walletBalance: newBalance, updatedAt: new Date() } }, { session });
-    await deposits.updateOne({ _id: depositId }, { $set: { status: "approved", approvedAt: new Date() } }, { session });
+    await deposits.updateOne(
+      { _id: depositId },
+      { $set: { status: "approved", approvedAt: new Date(), approvedBy: approvedBy ?? null } },
+      { session },
+    );
     await insertWalletTx(session, {
       userId: deposit.userId, type: "deposit", amount: Number(deposit.amount), balanceAfter: newBalance,
       method: "manual", note: "Deposit approved", referenceId: depositId,
     });
     return newBalance;
   });
+}
+
+/** Rejects a pending manual-review deposit (no money moves) — e.g. the UTR
+ * didn't actually match a real payment. */
+export async function rejectDeposit(depositId: string, rejectedBy: string, reason: string): Promise<void> {
+  const deposits = await getCollection<{ _id: string; status: string }>("deposits");
+  const deposit = await deposits.findOne({ _id: depositId });
+  if (!deposit) throw new Error("Deposit not found");
+  if (deposit.status !== "pending") throw new Error("Deposit already processed");
+  await deposits.updateOne(
+    { _id: depositId },
+    { $set: { status: "rejected", approvedAt: new Date(), approvedBy: rejectedBy, adminNote: reason || "Rejected by admin" } },
+  );
 }
 
 export async function redeemGiftCode(userId: string, code: string): Promise<{ newBalance: number; amount: number }> {

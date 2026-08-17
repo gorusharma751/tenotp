@@ -935,6 +935,77 @@ adminRouter.get("/payments", async (_req, res) => {
   }
 });
 
+// Deposits stuck in "pending" — the manual-review fallback when a QR
+// payment's auto-verify (BharatPe transaction match, Paytm order status)
+// didn't confirm it in time. The admin re-checks (e.g. against the BharatPe
+// Settings page's live transaction list) and approves/rejects here.
+adminRouter.get("/deposits", async (req, res) => {
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : "pending";
+    const deposits = await col<{
+      _id: string; userId: string; amount: number; method: string; utr?: string | null;
+      status: string; adminNote?: string | null; createdAt: Date; approvedAt?: Date | null; approvedBy?: string | null;
+    }>("deposits");
+    const filter = status === "all" ? {} : { status };
+    const rows = await deposits.find(filter).sort({ createdAt: -1 }).limit(300).toArray();
+    const users = await col<UserDoc>("users");
+    const userRows = await users.find({}, { projection: { name: 1, email: 1 } }).toArray();
+    const byId = new Map(userRows.map((u) => [u._id, u]));
+    res.json(
+      rows.map((d) => ({
+        id: d._id,
+        user: byId.get(d.userId)?.name ?? "—",
+        email: byId.get(d.userId)?.email ?? "",
+        userId: d.userId,
+        amount: Number(d.amount),
+        method: d.method,
+        utr: d.utr ?? "",
+        status: d.status,
+        note: d.adminNote ?? "",
+        createdAt: d.createdAt.toISOString(),
+        approvedAt: d.approvedAt ? d.approvedAt.toISOString() : null,
+        approvedBy: d.approvedBy ?? null,
+      })),
+    );
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+adminRouter.post("/deposits/:id/approve", async (req, res) => {
+  try {
+    const { approveDeposit } = await import("../lib/db/wallet.ts");
+    const newBalance = await approveDeposit(req.params.id, req.auth.userId);
+    // If this deposit came from the Paytm/BharatPe QR "submitted UTR, awaiting
+    // review" fallback, flip its session to "paid" too — otherwise the
+    // deposit page keeps polling a session stuck on "utr_submitted" forever
+    // even though the wallet was just credited.
+    try {
+      const sessions = await col<{ _id: string; depositId?: string | null; status: string }>("paytm_sessions");
+      await sessions.updateOne(
+        { depositId: req.params.id },
+        { $set: { status: "paid", creditedAt: new Date() } },
+      );
+    } catch {
+      /* best-effort — the credit itself already succeeded */
+    }
+    res.json({ ok: true, new_balance: newBalance });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
+adminRouter.post("/deposits/:id/reject", async (req, res) => {
+  try {
+    const reason = String(req.body?.reason ?? "").slice(0, 200);
+    const { rejectDeposit } = await import("../lib/db/wallet.ts");
+    await rejectDeposit(req.params.id, req.auth.userId, reason);
+    res.json({ ok: true });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
 adminRouter.get("/refunds", async (_req, res) => {
   try {
     const refunds = await col<{

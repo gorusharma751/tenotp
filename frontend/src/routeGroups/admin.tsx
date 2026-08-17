@@ -16,6 +16,7 @@ import AdminChannels from "@/routes/admin/channels";
 import AdminCountries from "@/routes/admin/countries";
 import AdminCountryDetail from "@/routes/admin/country.$code";
 import AdminCoupons from "@/routes/admin/coupons";
+import AdminDeposits from "@/routes/admin/deposits";
 import AdminEvents from "@/routes/admin/events";
 import AdminHealth from "@/routes/admin/health";
 import AdminJobs from "@/routes/admin/jobs";
@@ -95,6 +96,7 @@ export const adminChildRoutes = [
   p("/gourav-ankit-adi/countries", AdminCountries),
   p("/gourav-ankit-adi/country/$code", AdminCountryDetail),
   p("/gourav-ankit-adi/coupons", AdminCoupons),
+  p("/gourav-ankit-adi/deposits", AdminDeposits),
   p("/gourav-ankit-adi/events", AdminEvents),
   p("/gourav-ankit-adi/health", AdminHealth),
   p("/gourav-ankit-adi/jobs", AdminJobs),

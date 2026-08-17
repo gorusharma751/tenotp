@@ -39,6 +39,7 @@ export const ADMIN_NAV: NavItem[] = [
   { title: "Countries", url: "/gourav-ankit-adi/countries", icon: Globe2, group: "Operations" },
 
   { title: "Wallets", url: "/gourav-ankit-adi/wallets", icon: Wallet, group: "Finance" },
+  { title: "Deposits", url: "/gourav-ankit-adi/deposits", icon: Download, group: "Finance" },
   { title: "Payments", url: "/gourav-ankit-adi/payments", icon: CreditCard, group: "Finance" },
   { title: "Refunds", url: "/gourav-ankit-adi/refunds", icon: Undo2, group: "Finance" },
 
