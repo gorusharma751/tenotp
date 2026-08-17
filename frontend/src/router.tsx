@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { AppProviders } from "@/app/Providers";
 import { AuthLayout } from "@/layouts/AuthLayout";
 import { useUserStore } from "@/store/userStore";
+import { ensureSessionSynced } from "@/lib/auth";
 
 import Login from "@/routes/auth/login";
 import Register from "@/routes/auth/register";
@@ -105,7 +106,8 @@ const authLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "auth-layout",
   component: AuthLayout,
-  beforeLoad: ({ location }) => {
+  beforeLoad: async ({ location }) => {
+    await ensureSessionSynced();
     const u = useUserStore.getState().user;
     if (u && !location.pathname.startsWith("/logout")) {
       throw redirect({ to: "/dashboard" as any });

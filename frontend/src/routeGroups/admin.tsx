@@ -3,6 +3,7 @@ import { rootRoute } from "@/router";
 import { DashboardShell } from "@/layouts/DashboardShell";
 import { ADMIN_NAV } from "@/constants/nav";
 import { useUserStore } from "@/store/userStore";
+import { ensureSessionSynced } from "@/lib/auth";
 
 import AdminDash from "@/routes/admin/dashboard";
 import AdminAdmins from "@/routes/admin/admins";
@@ -74,7 +75,10 @@ export const adminLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "admin-layout",
   component: AdminShell,
-  beforeLoad: () => {
+  beforeLoad: async () => {
+    // Same race as dashboardLayoutRoute — wait for session hydration before
+    // reading the store, or a fresh page load always looks logged-out.
+    await ensureSessionSynced();
     const admin = useUserStore.getState().admin;
     if (!admin) throw redirect({ to: "/login" as any });
   },

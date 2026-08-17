@@ -8,6 +8,7 @@ import { rootRoute } from "@/router";
 import { DashboardShell } from "@/layouts/DashboardShell";
 import { USER_NAV } from "@/constants/nav";
 import { useUserStore } from "@/store/userStore";
+import { ensureSessionSynced } from "@/lib/auth";
 
 import DashboardIndex from "@/routes/dashboard/index";
 import BuyNumber from "@/routes/dashboard/buy-number";
@@ -53,7 +54,11 @@ export const dashboardLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "dashboard-layout",
   component: () => DashboardShell({ nav: USER_NAV, role: "user", profileRoot: "/dashboard/profile" }),
-  beforeLoad: () => {
+  beforeLoad: async () => {
+    // Wait for the token → user-store hydration to finish before deciding —
+    // otherwise a fresh page load always sees a not-yet-populated store and
+    // bounces a genuinely logged-in user to /login (see ensureSessionSynced).
+    await ensureSessionSynced();
     const u = useUserStore.getState().user;
     if (!u) throw redirect({ to: "/login" });
   },

@@ -5,7 +5,7 @@
 import { safeError } from "@/lib/errors";
 import { emailSchema, passwordSchema, nameSchema, referralCodeSchema } from "@/lib/validation";
 import { useUserStore } from "@/store/userStore";
-import { api, setToken } from "@/lib/apiClient";
+import { api, setToken, getToken } from "@/lib/apiClient";
 import type { User } from "@/types";
 
 export interface SignUpInput {
@@ -82,6 +82,13 @@ export async function updatePassword(newPasswordInput: string, resetToken?: stri
 }
 
 export async function syncSessionToStore() {
+  // No stored token at all (never logged in on this device, or already
+  // signed out) — nothing to check, and calling /api/auth/session would
+  // just fail. Skip the round-trip.
+  if (!getToken()) {
+    applyToStore(null);
+    return;
+  }
   try {
     const user = await api.get<User>("/api/auth/session");
     applyToStore(user);
@@ -89,4 +96,25 @@ export async function syncSessionToStore() {
     console.error("[auth] session sync failed", error);
     applyToStore(null);
   }
+}
+
+let sessionReadyPromise: Promise<void> | null = null;
+
+/**
+ * Resolves once the current tab's session (from the stored bearer token, if
+ * any) has been resolved into the user store. `user`/`admin` live in a
+ * plain in-memory Zustand store — every full page load starts that store
+ * back at `null` and repopulates it asynchronously (see AppProviders), but
+ * the dashboard/admin route guards read the store *synchronously* in
+ * `beforeLoad`. Without awaiting this first, a route guard on a fresh page
+ * load (hard refresh, reopening the tab, following a bookmarked link) races
+ * the async session check and always loses — it sees `user === null` before
+ * the token has even been verified and bounces a genuinely logged-in user
+ * to /login. Every route guard must `await ensureSessionSynced()` before
+ * checking the store. Idempotent — the underlying check only ever runs once
+ * per page load no matter how many callers await it.
+ */
+export function ensureSessionSynced(): Promise<void> {
+  if (!sessionReadyPromise) sessionReadyPromise = syncSessionToStore();
+  return sessionReadyPromise;
 }

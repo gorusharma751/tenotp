@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { useThemeSync } from "@/hooks/useThemeSync";
-import { syncSessionToStore } from "@/lib/auth";
+import { ensureSessionSynced } from "@/lib/auth";
 import { useCurrencyStore } from "@/store/currencyStore";
 
 // TODO(notifications agent): the monolith's <RealtimeOtpPopup /> (real-time
@@ -15,8 +15,11 @@ export function AppProviders({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Session lives in a bearer token now (see lib/apiClient.ts) — resolve it
     // once on mount. signIn/signUp/signOut in lib/auth.ts already update the
-    // store directly on every auth action within this tab.
-    syncSessionToStore();
+    // store directly on every auth action within this tab. Route guards
+    // (dashboardLayoutRoute/adminLayoutRoute) await this same singleton
+    // check themselves before reading the store, so this call and theirs
+    // share one in-flight request either way.
+    ensureSessionSynced();
   }, []);
   return (
     <>
