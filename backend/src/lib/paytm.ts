@@ -247,11 +247,19 @@ function bharatpeFailure(json: Record<string, unknown> | null | undefined, httpS
   return null;
 }
 
-function transactionArrayFrom(value: unknown): Record<string, unknown>[] | null {
+// Field names that unambiguously mean "this is the transaction list" even
+// when it's empty — e.g. BharatPe's own `data.transactions: []` on a
+// brand-new/unused QR, which has no rows yet to shape-sniff.
+const KNOWN_TRANSACTION_LIST_KEYS = new Set(["transactions", "txns", "transactionlist", "records"]);
+
+function transactionArrayFrom(value: unknown, keyHint?: string): Record<string, unknown>[] | null {
   if (Array.isArray(value)) {
     const rows = value.filter(
       (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object",
     );
+    if (value.length === 0 && keyHint && KNOWN_TRANSACTION_LIST_KEYS.has(keyHint.toLowerCase())) {
+      return [];
+    }
     const looksLikeTransactions = rows.some((row) =>
       [
         "amount",
@@ -267,8 +275,8 @@ function transactionArrayFrom(value: unknown): Record<string, unknown>[] | null 
     return looksLikeTransactions ? rows : null;
   }
   if (!value || typeof value !== "object") return null;
-  for (const child of Object.values(value as Record<string, unknown>)) {
-    const found = transactionArrayFrom(child);
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const found = transactionArrayFrom(child, key);
     if (found) return found;
   }
   return null;
