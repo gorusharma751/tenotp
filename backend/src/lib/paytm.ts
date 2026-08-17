@@ -412,18 +412,26 @@ export async function fetchBharatpeTransactions(cfg: PaytmConfig): Promise<Bhara
     .filter((t) => t.amount > 0);
 }
 
+export function normUtr(v: string) {
+  return v.replace(/\W/g, "").toLowerCase();
+}
+
 /** Pure matcher — pulled out of findBharatpeCredit so a reconcile sweep can
  * fetch the transaction list once and check it against many pending
- * sessions, instead of one BharatPe API call per session. */
+ * sessions, instead of one BharatPe API call per session.
+ * `excludeUtrs` (pre-normalized, see normUtr) skips transactions that have
+ * already been credited to some other session/deposit — without this, two
+ * different pending sessions that happen to share the same amount (e.g. two
+ * separate real ₹10.01 payments) can both match the *same* single bank
+ * transaction, and only whichever gets processed first is actually real. */
 export function matchBharatpeTxn(
   txns: BharatpeTxn[],
   amount: number,
   createdAt?: string,
   expectedUtr?: string,
+  excludeUtrs?: Set<string>,
 ) {
-  const wantedUtr = String(expectedUtr ?? "")
-    .replace(/\W/g, "")
-    .toLowerCase();
+  const wantedUtr = normUtr(String(expectedUtr ?? ""));
   const sessionStart = createdAt ? new Date(createdAt).getTime() - 5 * 60_000 : 0;
   const hit = txns.find((t) => {
     // Some dashboard responses label paise as a generic `amount`; accept both
@@ -431,13 +439,32 @@ export function matchBharatpeTxn(
     const amountMatches =
       Math.abs(t.amount - amount) < 0.005 || Math.abs(t.amount / 100 - amount) < 0.005;
     if (!amountMatches || /FAIL|PENDING|REFUND|REVERS|DECLIN/.test(t.status)) return false;
-    const txnUtr = t.utr.replace(/\W/g, "").toLowerCase();
+    const txnUtr = normUtr(t.utr);
     if (wantedUtr && txnUtr && txnUtr !== wantedUtr) return false;
+    if (excludeUtrs && txnUtr && excludeUtrs.has(txnUtr)) return false;
     if (!sessionStart || !t.at) return true;
     const txnTime = new Date(t.at).getTime();
     return !Number.isFinite(txnTime) || txnTime >= sessionStart;
   });
   return hit ?? null;
+}
+
+/** UTRs (normalized) already claimed by a paid session or an approved
+ * deposit — shared by findBharatpeCredit and the reconcile sweep so neither
+ * can double-match the same real transaction to two different orders. */
+export async function alreadyClaimedBharatpeUtrs(txns: BharatpeTxn[]): Promise<Set<string>> {
+  const utrs = txns.map((t) => t.utr).filter(Boolean);
+  if (!utrs.length) return new Set();
+  const sessionsCol = await paytmSessionsCol();
+  const depositsCol = await getCollection<{ status: string; utr: string | null }>("deposits");
+  const [paidSessions, approvedDeposits] = await Promise.all([
+    sessionsCol.find({ status: "paid", txnId: { $in: utrs } }).toArray(),
+    depositsCol.find({ status: "approved", utr: { $in: utrs } }).toArray(),
+  ]);
+  return new Set<string>([
+    ...paidSessions.map((s) => s.txnId).filter((v): v is string => Boolean(v)).map(normUtr),
+    ...approvedDeposits.map((d) => d.utr).filter((v): v is string => Boolean(v)).map(normUtr),
+  ]);
 }
 
 /** Finds a successful BharatPe credit whose amount matches the pending session exactly. */
@@ -448,7 +475,8 @@ export async function findBharatpeCredit(
   expectedUtr?: string,
 ) {
   const txns = await fetchBharatpeTransactions(cfg);
-  return matchBharatpeTxn(txns, amount, createdAt, expectedUtr);
+  const excludeUtrs = await alreadyClaimedBharatpeUtrs(txns);
+  return matchBharatpeTxn(txns, amount, createdAt, expectedUtr, excludeUtrs);
 }
 
 export async function saveBharatpeTokenStatus(status: BharatpeTokenStatus, message: string) {
@@ -513,7 +541,7 @@ export type PaytmSessionDoc = {
   qrData: string | null;
   qrImage: string | null;
   qrCodeId: string | null;
-  status: "pending" | "utr_submitted" | "paid" | "expired" | "failed";
+  status: "pending" | "utr_submitted" | "crediting" | "paid" | "expired" | "failed";
   txnId: string | null;
   utr: string | null;
   depositId: string | null;
@@ -645,72 +673,94 @@ export async function creditPaytmSession(
 
   const methodLabel = s.provider === "bharatpe" ? "BharatPe" : "Paytm";
 
-  // Atomic guard: only one caller can flip a given session from non-paid to paid.
+  // Atomically claim the session into a transitional "crediting" state —
+  // this (not "paid") is what stops two concurrent callers (a check-qr poll
+  // and the reconcile sweep firing at the same moment, say) from both
+  // trying to credit it. Crucially, the session is NOT marked "paid" here:
+  // it used to be, before the deposit/wallet-credit steps below even ran —
+  // so if those steps threw for any reason (a transient DB hiccup, a Render
+  // free-tier cold-start blip mid-transaction), the session was left stuck
+  // reporting "paid" to the polling frontend with no deposit and no money
+  // ever credited. Now the "paid" flip only happens after the credit
+  // actually succeeds, and a failure rolls the status back so it can be
+  // retried instead of silently lying about success.
+  const originalStatus = s.status;
   const claimed = await sessions.findOneAndUpdate(
-    { _id: sessionId, status: { $ne: "paid" } },
-    { $set: { status: "paid", txnId, creditedAt: new Date(), note } },
+    { _id: sessionId, status: { $nin: ["paid", "crediting"] } },
+    { $set: { status: "crediting" } },
     { returnDocument: "after" },
   );
   if (!claimed) {
-    // Someone else credited it concurrently.
+    // Someone else already claimed/credited it concurrently.
     const user = await users.findOne({ _id: s.userId });
     return Number(user?.walletBalance ?? 0);
   }
 
-  const amount = Number(s.amount);
-  const depositsCol = await getCollection<{
-    _id: string;
-    userId: string;
-    amount: number;
-    method: string;
-    currency: string;
-    network: string | null;
-    utr: string | null;
-    screenshotUrl: string | null;
-    status: string;
-    adminNote: string | null;
-    approvedBy: string | null;
-    approvedAt: Date | null;
-    createdAt: Date;
-  }>("deposits");
-  const depositId = crypto.randomUUID();
-  await depositsCol.insertOne({
-    _id: depositId,
-    userId: s.userId,
-    amount,
-    method: methodLabel,
-    currency: "INR",
-    network: null,
-    utr: txnId,
-    screenshotUrl: null,
-    status: "pending",
-    adminNote: note,
-    approvedBy: null,
-    approvedAt: null,
-    createdAt: new Date(),
-  });
-
-  const newBalance = await approveDeposit(depositId);
-
-  await sessions.updateOne({ _id: sessionId }, { $set: { depositId } });
-
-  // Best-effort admin-visible payment log — mirrors the legacy `payments` table.
   try {
-    const payments = await getCollection("payments");
-    await payments.insertOne({
-      _id: crypto.randomUUID(),
+    const amount = Number(s.amount);
+    const depositsCol = await getCollection<{
+      _id: string;
+      userId: string;
+      amount: number;
+      method: string;
+      currency: string;
+      network: string | null;
+      utr: string | null;
+      screenshotUrl: string | null;
+      status: string;
+      adminNote: string | null;
+      approvedBy: string | null;
+      approvedAt: Date | null;
+      createdAt: Date;
+    }>("deposits");
+    const depositId = crypto.randomUUID();
+    await depositsCol.insertOne({
+      _id: depositId,
       userId: s.userId,
-      method: methodLabel,
       amount,
-      status: "completed",
-      reference: txnId,
+      method: methodLabel,
+      currency: "INR",
+      network: null,
+      utr: txnId,
+      screenshotUrl: null,
+      status: "pending",
+      adminNote: note,
+      approvedBy: null,
+      approvedAt: null,
       createdAt: new Date(),
-    } as never);
-  } catch {
-    /* best-effort */
-  }
+    });
 
-  return newBalance;
+    const newBalance = await approveDeposit(depositId);
+
+    await sessions.updateOne(
+      { _id: sessionId },
+      { $set: { status: "paid", txnId, creditedAt: new Date(), note, depositId } },
+    );
+
+    // Best-effort admin-visible payment log — mirrors the legacy `payments` table.
+    try {
+      const payments = await getCollection("payments");
+      await payments.insertOne({
+        _id: crypto.randomUUID(),
+        userId: s.userId,
+        method: methodLabel,
+        amount,
+        status: "completed",
+        reference: txnId,
+        createdAt: new Date(),
+      } as never);
+    } catch {
+      /* best-effort */
+    }
+
+    return newBalance;
+  } catch (err) {
+    // Roll back to whatever it was before this attempt so a retry (next
+    // poll, or the reconcile sweep) can pick it back up cleanly instead of
+    // finding it permanently stuck on "crediting".
+    await sessions.updateOne({ _id: sessionId, status: "crediting" }, { $set: { status: originalStatus } });
+    throw err;
+  }
 }
 
 export function maskSecret(s: string) {

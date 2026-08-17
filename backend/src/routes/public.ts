@@ -249,35 +249,24 @@ publicRouter.post("/bharatpe-reconcile", async (req, res) => {
 
     // Guard against crediting the same real-world BharatPe transaction to
     // more than one session/deposit — two different pending sessions can
-    // easily land on the same paise-rounded amount (e.g. two ₹10.01 QRs
-    // where only one was ever actually paid), and matchBharatpeTxn alone
-    // has no way to know a UTR was already claimed. Anything already used
-    // by a paid session or an approved deposit is off-limits, and once a
-    // UTR is claimed *in this run* it's off-limits for the rest of the loop
-    // too — one bank transaction can only ever settle one order.
-    const txnUtrs = txns.map((t) => t.utr).filter(Boolean);
-    const depositsCol = await getCollection<{ _id: string; status: string; utr: string | null }>("deposits");
-    const [paidWithUtr, approvedDeposits] = await Promise.all([
-      txnUtrs.length ? sessions.find({ status: "paid", txnId: { $in: txnUtrs } }).toArray() : Promise.resolve([]),
-      txnUtrs.length ? depositsCol.find({ status: "approved", utr: { $in: txnUtrs } }).toArray() : Promise.resolve([]),
-    ]);
-    const usedUtrs = new Set<string>([
-      ...paidWithUtr.map((s) => s.txnId).filter((v): v is string => Boolean(v)),
-      ...approvedDeposits.map((d) => d.utr).filter((v): v is string => Boolean(v)),
-    ]);
+    // easily land on the same paise-rounded amount (e.g. two separate real
+    // ₹10.01 payments), and matchBharatpeTxn alone has no way to know a UTR
+    // was already claimed. Anything already used by a paid session or an
+    // approved deposit is off-limits (same check findBharatpeCredit uses
+    // for the regular check-qr poll path); a UTR claimed *in this run* is
+    // added to the set too, so a second matching session later in the same
+    // loop can't also grab it — one bank transaction settles one order.
+    const { alreadyClaimedBharatpeUtrs, normUtr } = await import("../lib/paytm.ts");
+    const usedUtrs = await alreadyClaimedBharatpeUtrs(txns);
 
     const { creditPaytmSession } = await import("../lib/paytm.ts");
     const { approveDeposit } = await import("../lib/db/wallet.ts");
     let credited = 0;
     const errors: string[] = [];
     for (const s of openSessions) {
-      const hit = matchBharatpeTxn(txns, Number(s.amount), s.createdAt.toISOString(), s.utr ?? undefined);
+      const hit = matchBharatpeTxn(txns, Number(s.amount), s.createdAt.toISOString(), s.utr ?? undefined, usedUtrs);
       if (!hit) continue;
       const claimKey = hit.utr || s.orderId;
-      if (usedUtrs.has(claimKey)) {
-        errors.push(`${s.orderId}: transaction ${claimKey} already credited to a different order, skipped`);
-        continue;
-      }
       try {
         if (s.status === "utr_submitted" && s.depositId) {
           // A deposit record already exists for this session (created when
@@ -292,7 +281,7 @@ publicRouter.post("/bharatpe-reconcile", async (req, res) => {
         } else {
           await creditPaytmSession(s._id, claimKey, `BharatPe auto-credit (reconcile) · UTR ${claimKey}`);
         }
-        usedUtrs.add(claimKey);
+        usedUtrs.add(normUtr(claimKey));
         credited++;
       } catch (err) {
         // Already credited by a concurrent check-qr poll, or the deposit
