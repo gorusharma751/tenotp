@@ -203,6 +203,41 @@ publicRouter.post("/sync-grizzly", async (req, res) => {
   }
 });
 
+// Keep-alive ping for the BharatPe dashboard session token. BharatPe issues
+// unofficial, session-style access tokens (there's no documented long-lived
+// API key) that appear to expire from inactivity — a periodic real request
+// using the token may keep it alive longer than it would otherwise last.
+// This does NOT prevent expiry forever (BharatPe could still time it out on
+// their side regardless), it just exercises the token regularly instead of
+// letting it sit idle. Schedule an external cron hitting this every 5-10
+// minutes with `x-cron-secret: $CRON_SECRET` — the same hit conveniently
+// also keeps a free-tier Render backend from spinning down on inactivity.
+publicRouter.post("/bharatpe-keepalive", async (req, res) => {
+  if (!checkCronSecret(req)) return res.status(401).json({ error: "unauthorized" });
+  try {
+    const { loadBharatpeConfig, fetchBharatpeTransactions, saveBharatpeTokenStatus } = await import(
+      "../lib/paytm.ts"
+    );
+    const cfg = await loadBharatpeConfig();
+    if (!cfg.enabled || !cfg.access_token) {
+      return res.json({ ok: true, skipped: "BharatPe not enabled or no token configured" });
+    }
+    try {
+      const txns = await fetchBharatpeTransactions(cfg);
+      await saveBharatpeTokenStatus("working", `Keep-alive ping ok · ${txns.length} recent transactions`);
+      res.json({ ok: true, status: "working", count: txns.length });
+    } catch (err) {
+      const { BharatpeApiError } = await import("../lib/paytm.ts");
+      const status = err instanceof BharatpeApiError ? err.status : "unavailable";
+      const message = err instanceof Error ? err.message : "Keep-alive ping failed";
+      await saveBharatpeTokenStatus(status, message);
+      res.json({ ok: false, status, message });
+    }
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : "Keep-alive failed" });
+  }
+});
+
 // Unified cron: refreshes catalogs for every enabled sms-activate provider
 // (grizzly, tiger, smsbower, sastasms, fivesim). Schedule from an external
 // cron trigger hitting this endpoint with `x-cron-secret: $CRON_SECRET`
