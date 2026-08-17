@@ -59,6 +59,8 @@ export default function Deposit() {
   const paytmStatus = useQuery({ queryKey: ["paytm-status"], queryFn: () => api.get<PaytmStatus>("/api/payments/paytm/status") });
   const paytmEnabled = paytmStatus.data?.enabled ?? false;
   const bpeAutoEnabled = paytmStatus.data?.bharatpeEnabled ?? false;
+  const razorpayStatus = useQuery({ queryKey: ["razorpay-config"], queryFn: () => api.get<{ enabled: boolean }>("/api/payments/razorpay/config") });
+  const razorpayEnabled = razorpayStatus.data?.enabled ?? false;
   const [rzpBusy, setRzpBusy] = useState(false);
   const qc = useQueryClient();
 
@@ -138,21 +140,23 @@ export default function Deposit() {
                 <TabsTrigger value="INR">🇮🇳 INR</TabsTrigger>
               </TabsList>
               <TabsContent value="INR">
-                <div className="mb-5 rounded-xl border border-primary/30 bg-primary/5 p-4">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div>
-                      <h3 className="font-semibold flex items-center gap-1.5">⚡ Instant pay via Razorpay</h3>
-                      <p className="text-xs text-muted-foreground mt-0.5">Cards, UPI, Netbanking — wallet credits automatically. No screenshot needed.</p>
+                {razorpayEnabled && (
+                  <div className="mb-5 rounded-xl border border-primary/30 bg-primary/5 p-4">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <h3 className="font-semibold flex items-center gap-1.5">⚡ Instant pay via Razorpay</h3>
+                        <p className="text-xs text-muted-foreground mt-0.5">Cards, UPI, Netbanking — wallet credits automatically. No screenshot needed.</p>
+                      </div>
+                      <Button size="lg" className="gradient-brand" onClick={payWithRazorpay} disabled={rzpBusy}>
+                        {rzpBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Pay ₹{amount} now
+                      </Button>
                     </div>
-                    <Button size="lg" className="gradient-brand" onClick={payWithRazorpay} disabled={rzpBusy}>
-                      {rzpBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Pay ₹{amount} now
-                    </Button>
+                    <div className="mt-3">
+                      <AmountBlock amount={amount} setAmount={setAmount} presets={INR_PRESETS} />
+                    </div>
                   </div>
-                  <div className="mt-3">
-                    <AmountBlock amount={amount} setAmount={setAmount} presets={INR_PRESETS} />
-                  </div>
-                </div>
+                )}
 
                 {paytmEnabled && (
                   <PaytmQrCard

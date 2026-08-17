@@ -16,7 +16,7 @@ import { api } from "@/lib/apiClient";
 // GET/POST /api/payments/razorpay/admin-status|admin-config — see
 // backend/src/lib/razorpay.ts getRazorpayAdminStatus/saveRazorpayConfig.
 
-type RazorpayStatus = { configured: boolean; key_id_masked: string; key_secret_masked: string };
+type RazorpayStatus = { configured: boolean; enabled: boolean; key_id_masked: string; key_secret_masked: string };
 
 function RazorpayPanel() {
   const qc = useQueryClient();
@@ -26,12 +26,24 @@ function RazorpayPanel() {
   });
   const [keyId, setKeyId] = useState("");
   const [keySecret, setKeySecret] = useState("");
+  const [enabled, setEnabled] = useState(false);
+  const [touchedEnabled, setTouchedEnabled] = useState(false);
+
+  useEffect(() => {
+    if (q.data && !touchedEnabled) setEnabled(q.data.enabled);
+  }, [q.data, touchedEnabled]);
 
   const saveM = useMutation({
-    mutationFn: () => api.post<{ ok: boolean }>("/api/payments/razorpay/admin-config", { key_id: keyId, key_secret: keySecret }),
+    mutationFn: () =>
+      api.post<{ ok: boolean }>("/api/payments/razorpay/admin-config", {
+        ...(keyId ? { key_id: keyId } : {}),
+        ...(keySecret ? { key_secret: keySecret } : {}),
+        enabled,
+      }),
     onSuccess: () => {
-      toast.success("Razorpay credentials saved");
+      toast.success("Razorpay settings saved");
       setKeySecret("");
+      setTouchedEnabled(false);
       qc.invalidateQueries({ queryKey: ["admin", "settings", "razorpay"] });
     },
     onError: (e: any) => toast.error(e?.message || "Could not save Razorpay config"),
@@ -41,11 +53,25 @@ function RazorpayPanel() {
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2">
         <CardTitle className="text-base">Razorpay</CardTitle>
-        <Badge variant={q.data?.configured ? "default" : "secondary"}>
-          {q.data?.configured ? "configured" : "not configured"}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={q.data?.configured ? "default" : "secondary"}>
+            {q.data?.configured ? "configured" : "not configured"}
+          </Badge>
+          <Badge variant={q.data?.enabled ? "default" : "secondary"}>{q.data?.enabled ? "live" : "off"}</Badge>
+        </div>
       </CardHeader>
       <CardContent className="grid gap-4 sm:grid-cols-2">
+        <div className="sm:col-span-2 flex items-center gap-3 rounded-lg border p-3">
+          <Switch
+            id="rzp-enabled"
+            checked={enabled}
+            onCheckedChange={(v) => {
+              setEnabled(v);
+              setTouchedEnabled(true);
+            }}
+          />
+          <Label htmlFor="rzp-enabled">Show Razorpay to customers on the Deposit page</Label>
+        </div>
         <div className="grid gap-1.5">
           <Label>Key ID</Label>
           <Input
@@ -64,8 +90,8 @@ function RazorpayPanel() {
           />
         </div>
         <div className="sm:col-span-2">
-          <Button onClick={() => saveM.mutate()} disabled={saveM.isPending || !keyId || !keySecret}>
-            {saveM.isPending ? "Saving…" : "Save & test"}
+          <Button onClick={() => saveM.mutate()} disabled={saveM.isPending}>
+            {saveM.isPending ? "Saving…" : "Save"}
           </Button>
         </div>
       </CardContent>

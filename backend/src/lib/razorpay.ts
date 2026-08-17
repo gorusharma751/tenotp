@@ -7,10 +7,13 @@ type AdminSecretDoc = { _id: string; value: unknown; updatedAt: Date };
 export async function loadRazorpayCreds() {
   const secrets = await getCollection<AdminSecretDoc>("admin_secrets");
   const doc = await secrets.findOne({ _id: "razorpay" });
-  const v = (doc?.value ?? {}) as { key_id?: string; key_secret?: string };
+  const v = (doc?.value ?? {}) as { key_id?: string; key_secret?: string; enabled?: boolean };
   return {
     key_id: v.key_id || process.env.RAZORPAY_KEY_ID || "",
     key_secret: v.key_secret || process.env.RAZORPAY_KEY_SECRET || "",
+    // Defaults to true when never explicitly set, so setups that saved keys
+    // before this toggle existed keep working without any admin action.
+    enabled: v.enabled ?? true,
   };
 }
 
@@ -183,7 +186,8 @@ export async function verifyRazorpayPayment(
 
 export async function getRazorpayConfig() {
   const c = await loadRazorpayCreds();
-  return { enabled: Boolean(c.key_id && c.key_secret) };
+  // Customer-facing: only live when BOTH keys exist AND the admin toggle is on.
+  return { enabled: Boolean(c.key_id && c.key_secret) && c.enabled };
 }
 
 function mask(s: string) {
@@ -196,22 +200,31 @@ export async function getRazorpayAdminStatus() {
   const c = await loadRazorpayCreds();
   return {
     configured: Boolean(c.key_id && c.key_secret),
+    enabled: c.enabled,
     key_id_masked: mask(c.key_id),
     key_secret_masked: mask(c.key_secret),
   };
 }
 
-export async function saveRazorpayConfig(data: { key_id: string; key_secret: string }) {
-  if (!data?.key_id?.startsWith("rzp_")) throw new Error("key_id must start with rzp_");
-  if (!data?.key_secret || data.key_secret.length < 10) throw new Error("Invalid key_secret");
-  const key_id = data.key_id.trim();
-  const key_secret = data.key_secret.trim();
+export async function saveRazorpayConfig(data: { key_id?: string; key_secret?: string; enabled?: boolean }) {
+  const existing = await loadRazorpayCreds();
+  // Keys are optional on this call — a bare toggle flip (enable/disable)
+  // shouldn't require re-pasting both secrets every time. Only validate
+  // format when a non-empty value is actually being changed.
+  const key_id = data.key_id?.trim() ? data.key_id.trim() : existing.key_id;
+  const key_secret = data.key_secret?.trim() ? data.key_secret.trim() : existing.key_secret;
+  if (data.key_id?.trim() && !key_id.startsWith("rzp_")) throw new Error("key_id must start with rzp_");
+  if (data.key_secret?.trim() && key_secret.length < 10) throw new Error("Invalid key_secret");
+  const enabled = data.enabled ?? existing.enabled;
+  if (enabled && !(key_id && key_secret)) {
+    throw new Error("Add your Razorpay Key ID and Key Secret before enabling it");
+  }
   const secrets = await getCollection<AdminSecretDoc>("admin_secrets");
   await secrets.updateOne(
     { _id: "razorpay" },
     {
       $set: {
-        value: { key_id, key_secret },
+        value: { key_id, key_secret, enabled },
         updatedAt: new Date(),
       },
     },

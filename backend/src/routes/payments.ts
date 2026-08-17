@@ -577,12 +577,15 @@ paymentsRouter.get("/razorpay/admin-status", requireAdmin, async (_req, res) => 
 
 paymentsRouter.post("/razorpay/admin-config", requireAdmin, async (req, res) => {
   try {
-    const key_id = String(req.body?.key_id ?? "");
-    const key_secret = String(req.body?.key_secret ?? "");
-    if (!key_id.startsWith("rzp_")) throw new Error("key_id must start with rzp_");
-    if (!key_secret || key_secret.length < 10) throw new Error("Invalid key_secret");
+    const b = req.body ?? {};
     const { saveRazorpayConfig } = await import("../lib/razorpay.ts");
-    res.json(await saveRazorpayConfig({ key_id: key_id.trim(), key_secret: key_secret.trim() }));
+    res.json(
+      await saveRazorpayConfig({
+        key_id: b.key_id !== undefined ? String(b.key_id) : undefined,
+        key_secret: b.key_secret !== undefined ? String(b.key_secret) : undefined,
+        enabled: b.enabled !== undefined ? Boolean(b.enabled) : undefined,
+      }),
+    );
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Could not save Razorpay config" });
   }
