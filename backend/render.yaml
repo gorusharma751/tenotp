@@ -9,7 +9,7 @@ services:
     name: tenotp-backend
     runtime: node
     rootDir: backend
-    plan: starter
+    plan: free
     region: singapore
     branch: main
     buildCommand: npm install

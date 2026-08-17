@@ -181,6 +181,8 @@ Order matters a little: deploy the **backend first** (Vercel will ask for its UR
 
 > This is a plain Node process — no native-binary/bundler issues on Render's Linux build (that Windows-only workaround in this README doesn't apply there).
 
+> **Plan note**: [`backend/render.yaml`](backend/render.yaml) is set to `plan: free` — no card needed. Trade-off: the service sleeps after ~15 minutes with no traffic, so the first request after a quiet period takes ~30–50s to wake it back up (then it's fast again until it goes quiet once more). Fine for testing/early usage. Once you have real traffic, change `plan: free` to `plan: starter` in that file (and push) for an always-on service — Render will ask for a card at that point.
+
 ### 7b. Frontend → Vercel
 
 1. Sign in at [vercel.com](https://vercel.com) (GitHub login again).
