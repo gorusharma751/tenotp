@@ -3,13 +3,24 @@ import { MongoClient, type Db, type Document } from "mongodb";
 import dns from "node:dns";
 
 // `mongodb+srv://` needs a DNS SRV lookup, which Node's own resolver can fail
-// even when the OS resolver works fine (seen on some Windows networks).
-// Appending public resolvers as a fallback fixes it without overriding
-// whatever DNS setup already works.
+// even when the OS resolver works fine (seen on some Windows networks, where
+// Node ends up pointed at a local stub resolver — just `127.0.0.1`/`::1` —
+// that can't answer SRV/TXT queries). Appending public resolvers fixes that
+// specific case. Only do this when the current servers actually look like
+// that broken stub-only setup — unconditionally mixing in 8.8.8.8/1.1.1.1 on
+// a platform whose resolver already works (e.g. a Linux container host like
+// Render) can make the MongoDB driver's *A*-record lookups for the Atlas
+// shard hosts resolve inconsistently across different resolvers, landing on
+// a stale IP and failing the TLS handshake against whatever's actually
+// listening there — seen as `tlsv1 alert internal error` from the driver.
 try {
-  const current = dns.getServers();
-  const fallback = ["8.8.8.8", "1.1.1.1"];
-  dns.setServers([...current, ...fallback.filter((s) => !current.includes(s))]);
+  const current: string[] = dns.getServers();
+  const knownStubAddresses = new Set(["127.0.0.1", "::1"]);
+  const isBrokenStubOnly = current.length > 0 && current.every((s) => knownStubAddresses.has(s));
+  if (isBrokenStubOnly) {
+    const fallback = ["8.8.8.8", "1.1.1.1"];
+    dns.setServers([...current, ...fallback.filter((s) => !current.includes(s))]);
+  }
 } catch {
   /* best-effort */
 }
