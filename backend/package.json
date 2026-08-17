@@ -7,8 +7,8 @@
   },
   "scripts": {
     "dev": "node --env-file=.env --experimental-strip-types --watch src/index.ts",
-    "start": "node --env-file=.env --experimental-strip-types src/index.ts",
-    "db:indexes": "node --env-file=.env --experimental-strip-types scripts/ensure-indexes.ts",
+    "start": "node --env-file-if-exists=.env --experimental-strip-types src/index.ts",
+    "db:indexes": "node --env-file-if-exists=.env --experimental-strip-types scripts/ensure-indexes.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
