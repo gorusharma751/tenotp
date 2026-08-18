@@ -62,9 +62,9 @@ export default function AdminOrderManagementDetail() {
         description={o ? `${o.service.name} · ${o.customer.name} · ${dateTime(o.createdAt)}` : ""}
         actions={
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => actionM.mutate("approve")} disabled={actionM.isPending}><Check className="mr-2 h-4 w-4" />Approve</Button>
-            <Button variant="outline" onClick={() => actionM.mutate("reject")} disabled={actionM.isPending}><X className="mr-2 h-4 w-4" />Reject</Button>
-            <Button variant="outline" onClick={() => actionM.mutate("cancel")} disabled={actionM.isPending}><Ban className="mr-2 h-4 w-4" />Cancel</Button>
+            <Button variant="outline" onClick={() => { if (confirm(`Approve order ${o?.reference ?? id}?`)) actionM.mutate("approve"); }} disabled={actionM.isPending}><Check className="mr-2 h-4 w-4" />Approve</Button>
+            <Button variant="outline" onClick={() => { if (confirm(`Reject order ${o?.reference ?? id}? This refunds the customer's wallet.`)) actionM.mutate("reject"); }} disabled={actionM.isPending}><X className="mr-2 h-4 w-4" />Reject</Button>
+            <Button variant="outline" onClick={() => { if (confirm(`Cancel order ${o?.reference ?? id}? This refunds the customer's wallet.`)) actionM.mutate("cancel"); }} disabled={actionM.isPending}><Ban className="mr-2 h-4 w-4" />Cancel</Button>
           </div>
         }
       />

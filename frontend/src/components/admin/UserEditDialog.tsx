@@ -28,6 +28,17 @@ export function UserEditDialog({ userId, initial }: Props) {
   const qc = useQueryClient();
 
   const save = async () => {
+    // Wallet-balance overwrite and role escalation (esp. granting "admin")
+    // used to fire on a single "Save changes" click with no distinct
+    // warning at all — bundled in with harmless fields like name/phone.
+    const walletChanged = wallet !== "" && Number(wallet) !== Number(initial.wallet ?? 0);
+    const roleChanged = Boolean(role) && role !== initial.role;
+    if (walletChanged || roleChanged) {
+      const parts: string[] = [];
+      if (walletChanged) parts.push(`set the wallet balance to ₹${Number(wallet).toFixed(2)}`);
+      if (roleChanged) parts.push(`grant the "${role}" role`);
+      if (!confirm(`This will ${parts.join(" and ")}. Continue?`)) return;
+    }
     setBusy(true);
     try {
       await api.post(`/api/admin/users/${userId}/profile`, {

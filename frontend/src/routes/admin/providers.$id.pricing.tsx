@@ -105,7 +105,7 @@ function ProviderPricingPage() {
                     <TableCell>{r.priority}</TableCell>
                     <TableCell><Badge variant={r.active ? "default" : "outline"}>{r.active ? "active" : "off"}</Badge></TableCell>
                     <TableCell className="text-right">
-                      <Button size="sm" variant="ghost" className="text-destructive" onClick={() => actions.deleteRule.mutate(r.id)}><Trash2 className="h-4 w-4" /></Button>
+                      <Button size="sm" variant="ghost" className="text-destructive" onClick={() => { if (confirm("Delete this pricing rule? It affects live pricing immediately.")) actions.deleteRule.mutate(r.id); }}><Trash2 className="h-4 w-4" /></Button>
                     </TableCell>
                   </TableRow>
                 ))}

@@ -5,9 +5,9 @@ import { StatCard } from "@/components/common/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { AreaMini, BarMini, DonutMini } from "@/components/charts/MiniChart";
-import { DollarSign, Users, Package, ShieldAlert, Inbox, CheckCircle2, Undo2, UserCheck, Globe2, Puzzle, Clock, Wallet, Activity, Megaphone, ShoppingCart, KeyRound, ServerCog } from "lucide-react";
+import { DollarSign, Users, Package, ShieldAlert, Inbox, CheckCircle2, Undo2, UserCheck, Globe2, Puzzle, Clock, Wallet, Activity, Megaphone, ShoppingCart, KeyRound } from "lucide-react";
 import { api } from "@/lib/apiClient";
-import { money, dateTime, timeAgo } from "@/utils/format";
+import { money, timeAgo } from "@/utils/format";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusPill } from "@/components/admin/AdminTable";
 import type { AdminOrder, AdminUser, StatPoint } from "@/types";
@@ -47,10 +47,10 @@ export default function AdminDash() {
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         {a.isLoading || !k ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />) : (
           <>
-            <StatCard label="Today's Revenue" value={money(k.revenueToday)} delta="+12.4% vs yesterday" icon={DollarSign} tone="brand" />
-            <StatCard label="Today's Orders" value={String(k.ordersToday)} delta="+8.2% WoW" icon={ShoppingCart} tone="success" />
-            <StatCard label="Today's OTP" value={String(k.otpToday)} delta="97% success" icon={Inbox} tone="info" />
-            <StatCard label="Refund Requests" value={String(k.refundRequests)} delta="Needs review" icon={Undo2} tone="warning" />
+            <StatCard label="Today's Revenue" value={money(k.revenueToday)} icon={DollarSign} tone="brand" />
+            <StatCard label="Today's Orders" value={String(k.ordersToday)} icon={ShoppingCart} tone="success" />
+            <StatCard label="Today's OTP" value={String(k.otpToday)} icon={Inbox} tone="info" />
+            <StatCard label="Refund Requests" value={String(k.refundRequests)} icon={Undo2} tone="warning" />
           </>
         )}
       </div>
@@ -60,7 +60,7 @@ export default function AdminDash() {
         {k && <>
           <StatCard label="Pending Orders" value={String(k.pending)} icon={Clock} tone="warning" />
           <StatCard label="Completed Orders" value={String(k.completed)} icon={CheckCircle2} tone="success" />
-          <StatCard label="Total Users" value={String(k.totalUsers)} delta="+42 today" icon={Users} tone="info" />
+          <StatCard label="Total Users" value={String(k.totalUsers)} icon={Users} tone="info" />
           <StatCard label="Active Users" value={String(k.activeUsers)} icon={UserCheck} tone="brand" />
         </>}
       </div>
@@ -126,26 +126,14 @@ export default function AdminDash() {
         </Card>
       </div>
 
+      {/* The old "System status" card here was entirely hardcoded fake data
+          (always "operational" except a permanently-fake "Payments:
+          degraded") — actively misleading on an ops dashboard, since an
+          admin could read that as a real incident or a false all-clear.
+          There's no real health-check aggregation backing this anywhere
+          (see the Health page, which is honestly empty rather than
+          fabricated), so it's removed rather than left faked. */}
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <Card className="shadow-soft">
-          <CardHeader><CardTitle className="flex items-center gap-2"><ServerCog className="h-4 w-4" />System status</CardTitle></CardHeader>
-          <CardContent className="space-y-3 text-sm">
-            {[
-              { name: "API Gateway", state: "operational" },
-              { name: "OTP Delivery", state: "operational" },
-              { name: "Wallet Service", state: "operational" },
-              { name: "Payments", state: "degraded" },
-              { name: "Reports", state: "operational" },
-            ].map((s) => (
-              <div key={s.name} className="flex items-center justify-between">
-                <span>{s.name}</span>
-                <span className={`text-xs font-medium ${s.state === "operational" ? "text-success" : "text-warning"}`}>● {s.state}</span>
-              </div>
-            ))}
-            <p className="text-xs text-muted-foreground pt-2 border-t">Last check {dateTime(new Date().toISOString())}</p>
-          </CardContent>
-        </Card>
-
         <Card className="shadow-soft">
           <CardHeader><CardTitle>Quick actions</CardTitle></CardHeader>
           <CardContent className="grid grid-cols-2 gap-2">

@@ -559,19 +559,25 @@ async function paytmSessionsCol() {
 /**
  * Gives every pending QR a unique paise suffix so an incoming UPI credit
  * can be matched back to exactly one user without any gateway API.
+ *
+ * Reserves the offset atomically via a per-base-amount counter instead of
+ * reading currently-taken amounts and picking a free one — the read-then-
+ * pick approach let two concurrent QR generations for the same base amount
+ * both observe the same "free" slot and collide (fails safe — no wrong
+ * credit, but the resulting real payment then can't auto-match and needs
+ * manual admin review instead).
  */
 export async function uniqueUpiAmount(base: number) {
-  const col = await paytmSessionsCol();
-  const rows = await col
-    .find({ status: { $in: ["pending", "utr_submitted"] }, expiresAt: { $gte: new Date() } })
-    .project({ amount: 1 })
-    .toArray();
-  const taken = new Set(rows.map((r) => Number((r as { amount: number }).amount).toFixed(2)));
-  for (let i = 0; i < 99; i++) {
-    const candidate = Number((base + (i + 1) / 100).toFixed(2));
-    if (!taken.has(candidate.toFixed(2))) return candidate;
-  }
-  return Number((base + Math.random()).toFixed(2));
+  const counters = await getCollection<{ _id: string; seq: number }>("upi_amount_counters");
+  const key = `upi:${base.toFixed(2)}`;
+  const doc = await counters.findOneAndUpdate(
+    { _id: key },
+    { $inc: { seq: 1 } },
+    { upsert: true, returnDocument: "after" },
+  );
+  const seq = Number(doc?.seq ?? 1);
+  const offset = ((seq - 1) % 99) + 1; // 1..99 paise, wraps after 99 concurrent reservations
+  return Number((base + offset / 100).toFixed(2));
 }
 
 /** Finds the one live pending UPI session that matches an incoming credit amount. */
@@ -698,39 +704,66 @@ export async function creditPaytmSession(
 
   try {
     const amount = Number(s.amount);
-    const depositsCol = await getCollection<{
-      _id: string;
-      userId: string;
-      amount: number;
-      method: string;
-      currency: string;
-      network: string | null;
-      utr: string | null;
-      screenshotUrl: string | null;
-      status: string;
-      adminNote: string | null;
-      approvedBy: string | null;
-      approvedAt: Date | null;
-      createdAt: Date;
-    }>("deposits");
-    const depositId = crypto.randomUUID();
-    await depositsCol.insertOne({
-      _id: depositId,
-      userId: s.userId,
-      amount,
-      method: methodLabel,
-      currency: "INR",
-      network: null,
-      utr: txnId,
-      screenshotUrl: null,
-      status: "pending",
-      adminNote: note,
-      approvedBy: null,
-      approvedAt: null,
-      createdAt: new Date(),
-    });
+    let depositId = s.depositId ?? null;
+    let newBalance: number;
 
-    const newBalance = await approveDeposit(depositId);
+    if (depositId) {
+      // A pending deposit already exists for this session (created earlier
+      // when the user submitted a UTR for manual review — see
+      // POST /paytm/submit-utr) — reuse it via approveDeposit instead of
+      // minting a second one. Minting a second deposit here used to leave
+      // the original orphaned as "pending" and independently approvable
+      // from the admin Deposits queue, letting one real payment get
+      // credited twice: once here (auto-verify catching up), and again
+      // later when an admin worked through the queue and approved the
+      // still-visible original.
+      try {
+        newBalance = await approveDeposit(depositId);
+      } catch (err) {
+        // Already approved by a concurrent caller (e.g. an admin clicked
+        // approve at the same moment auto-verify fired) — the money
+        // already moved, so this isn't a failure, just report the balance.
+        if (err instanceof Error && err.message === "Deposit already processed") {
+          const user = await users.findOne({ _id: s.userId });
+          newBalance = Number(user?.walletBalance ?? 0);
+        } else {
+          throw err;
+        }
+      }
+    } else {
+      const depositsCol = await getCollection<{
+        _id: string;
+        userId: string;
+        amount: number;
+        method: string;
+        currency: string;
+        network: string | null;
+        utr: string | null;
+        screenshotUrl: string | null;
+        status: string;
+        adminNote: string | null;
+        approvedBy: string | null;
+        approvedAt: Date | null;
+        createdAt: Date;
+      }>("deposits");
+      depositId = crypto.randomUUID();
+      await depositsCol.insertOne({
+        _id: depositId,
+        userId: s.userId,
+        amount,
+        method: methodLabel,
+        currency: "INR",
+        network: null,
+        utr: txnId,
+        screenshotUrl: null,
+        status: "pending",
+        adminNote: note,
+        approvedBy: null,
+        approvedAt: null,
+        createdAt: new Date(),
+      });
+      newBalance = await approveDeposit(depositId);
+    }
 
     await sessions.updateOne(
       { _id: sessionId },

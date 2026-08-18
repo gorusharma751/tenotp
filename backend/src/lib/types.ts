@@ -17,6 +17,11 @@ export type UserDoc = {
   updatedAt: Date;
   lastLogin?: Date;
   resellerPanelId?: string | null;
+  /** Bumped on every successful password change/reset — password-reset JWTs
+   * embed the version they were issued against, so an already-used link (or
+   * one superseded by a newer reset request) stops verifying even before
+   * its own expiry. See lib/auth/jwt.ts signPasswordResetToken. */
+  passwordResetVersion?: number;
 };
 
 export type PublicUserDto = {

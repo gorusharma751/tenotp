@@ -129,7 +129,7 @@ export default function AdminOrderManagement() {
         {selected.size > 0 && (
           <>
             <span className="text-sm text-muted-foreground">{selected.size} selected</span>
-            <Select onValueChange={(v) => bulkM.mutate({ ids: Array.from(selected), next: v as ManagedOrderStatus })}>
+            <Select onValueChange={(v) => { if (confirm(`Set status to "${v}" for ${selected.size} selected order(s)? Cancel/reject refunds the customer's wallet.`)) bulkM.mutate({ ids: Array.from(selected), next: v as ManagedOrderStatus }); }}>
               <SelectTrigger className="w-44"><SelectValue placeholder="Bulk set status..." /></SelectTrigger>
               <SelectContent>
                 {STATUS_OPTIONS.filter((o) => o !== "all").map((opt) => (
@@ -161,11 +161,11 @@ export default function AdminOrderManagement() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild><Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => actionM.mutate({ id: o.id, action: "approve" })}><Check className="mr-2 h-4 w-4" />Approve</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => actionM.mutate({ id: o.id, action: "reject" })}><X className="mr-2 h-4 w-4" />Reject</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => actionM.mutate({ id: o.id, action: "cancel" })}><Ban className="mr-2 h-4 w-4" />Cancel</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { if (confirm(`Approve order ${o.reference}?`)) actionM.mutate({ id: o.id, action: "approve" }); }}><Check className="mr-2 h-4 w-4" />Approve</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { if (confirm(`Reject order ${o.reference}? This refunds the customer's wallet.`)) actionM.mutate({ id: o.id, action: "reject" }); }}><X className="mr-2 h-4 w-4" />Reject</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => { if (confirm(`Cancel order ${o.reference}? This refunds the customer's wallet.`)) actionM.mutate({ id: o.id, action: "cancel" }); }}><Ban className="mr-2 h-4 w-4" />Cancel</DropdownMenuItem>
               {STATUS_OPTIONS.filter((v) => v !== "all").map((opt) => (
-                <DropdownMenuItem key={opt} className="capitalize" onClick={() => statusM.mutate({ id: o.id, next: opt })}>
+                <DropdownMenuItem key={opt} className="capitalize" onClick={() => { if (confirm(`Set order ${o.reference} status to "${opt}"?`)) statusM.mutate({ id: o.id, next: opt }); }}>
                   Set status: {opt}
                 </DropdownMenuItem>
               ))}

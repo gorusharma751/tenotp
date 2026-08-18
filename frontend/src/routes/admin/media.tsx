@@ -6,10 +6,13 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/apiClient";
 import { dateShort } from "@/utils/format";
-import { toast } from "sonner";
 import { Folder, ImageIcon, FolderOpen, Trash2 } from "lucide-react";
 import type { MediaAsset } from "@/types";
 
+// TODO(backend): media assets are read-only from GET /api/admin/media —
+// there's no DELETE endpoint, so this delete button used to fake success
+// with a toast and no network call, no confirm, and no actual removal.
+// Left honestly disabled instead.
 export default function AdminMedia() {
   const q = useQuery({ queryKey: ["admin", "media"], queryFn: () => api.get<MediaAsset[]>("/api/admin/media") });
   const [query, setQuery] = useState("");
@@ -36,7 +39,7 @@ export default function AdminMedia() {
             <div className="aspect-square grid place-items-center bg-gradient-to-br from-primary/10 to-info/10 relative">
               <ImageIcon className="h-8 w-8 text-muted-foreground" />
               <div className="absolute inset-0 hidden group-hover:flex items-end justify-end p-2 bg-black/40">
-                <Button variant="ghost" size="icon" className="h-7 w-7 text-white" onClick={() => toast.error("Deleted")}><Trash2 className="h-3 w-3" /></Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-white" disabled title="No backend delete endpoint yet"><Trash2 className="h-3 w-3" /></Button>
               </div>
             </div>
             <CardContent className="p-2">

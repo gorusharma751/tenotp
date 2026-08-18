@@ -256,7 +256,6 @@ paymentsRouter.post("/paytm/submit-utr", requireAuth, async (req, res) => {
       { _id: s._id },
       { $set: { utr, status: "utr_submitted", note: "User submitted UTR — awaiting admin review" } },
     );
-    const depositId = crypto.randomUUID();
     const deposits = await getCollection<{
       _id: string;
       userId: string;
@@ -272,6 +271,29 @@ paymentsRouter.post("/paytm/submit-utr", requireAuth, async (req, res) => {
       approvedAt: Date | null;
       createdAt: Date;
     }>("deposits");
+    // A deposit may already exist for this session (a previous UTR
+    // submission — e.g. a retry after a slow response, or resubmitting a
+    // corrected UTR — that also fell through to manual review). Update it
+    // in place instead of minting a second one: repeated submissions used
+    // to create a fresh orphaned "pending" deposit every time, each one
+    // separately approvable from the admin queue — letting one real
+    // payment get credited more than once.
+    if (s.depositId) {
+      const existing = await deposits.findOne({ _id: s.depositId });
+      if (existing && existing.status === "pending") {
+        await deposits.updateOne(
+          { _id: s.depositId },
+          {
+            $set: {
+              utr,
+              adminNote: `${provider === "bharatpe" ? "BharatPe" : "Paytm"} QR ${s.orderId} — UTR re-submitted by user`,
+            },
+          },
+        );
+        return res.json({ credited: false, pending: true, balance: null });
+      }
+    }
+    const depositId = crypto.randomUUID();
     await deposits.insertOne({
       _id: depositId,
       userId: req.auth.userId,

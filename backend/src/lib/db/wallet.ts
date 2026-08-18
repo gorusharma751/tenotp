@@ -332,8 +332,37 @@ export async function adminUpdateProfile(userId: string, patch: { name?: string;
   if (patch.email !== undefined) { set.email = patch.email; set.emailLower = patch.email.toLowerCase(); }
   if (patch.phone !== undefined) set.phone = patch.phone;
   if (patch.status !== undefined) set.status = patch.status;
-  if (patch.walletBalance !== undefined) set.walletBalance = patch.walletBalance;
-  const users = await getCollection<UserDoc>("users");
-  const res = await users.updateOne({ _id: userId }, { $set: set });
-  if (res.matchedCount === 0) throw new Error("User not found");
+
+  if (patch.walletBalance === undefined) {
+    const users = await getCollection<UserDoc>("users");
+    const res = await users.updateOne({ _id: userId }, { $set: set });
+    if (res.matchedCount === 0) throw new Error("User not found");
+    return;
+  }
+
+  // Wallet balance is being directly overwritten here (not a relative
+  // credit/debit like adminAdjustWallet) — still route it through a
+  // transaction with a matching wallet_tx ledger entry, so an edit that
+  // happens to touch the balance doesn't silently bypass the audit trail
+  // every other money-affecting action in this file goes through.
+  await withMoneyTransaction(async (session) => {
+    const users = await getCollection<UserDoc>("users");
+    const user = await users.findOne({ _id: userId }, { session });
+    if (!user) throw new Error("User not found");
+    const newBalance = Number(patch.walletBalance);
+    if (!Number.isFinite(newBalance) || newBalance < 0) throw new Error("Invalid wallet balance");
+    const delta = Number((newBalance - Number(user.walletBalance)).toFixed(2));
+    await users.updateOne({ _id: userId }, { $set: { ...set, walletBalance: newBalance } }, { session });
+    if (delta !== 0) {
+      await insertWalletTx(session, {
+        userId,
+        type: "adjustment",
+        amount: delta,
+        balanceAfter: newBalance,
+        method: "admin-profile-edit",
+        note: "Wallet balance set via admin user-edit form",
+        referenceId: null,
+      });
+    }
+  });
 }

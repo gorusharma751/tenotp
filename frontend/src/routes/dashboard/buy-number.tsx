@@ -123,31 +123,52 @@ export default function BuyNumber() {
       const latest = await liveServices.refetch();
       const fresh = latest.data?.find((s) => s.providerId === service.providerId && s.id === service.id) ?? service;
       setService(fresh);
-      const results = await Promise.all(
+      type BuyResult = { id: string; number: string; service: string; country: string; createdAt: string; expiresAt: string; providerName: string; providerServer: string; price: number };
+      // allSettled, not all — each call is its own independent wallet debit
+      // + order on the backend. With Promise.all, one failure partway
+      // through a multi-buy discarded every already-succeeded (already
+      // charged!) result and showed only a single error toast, making
+      // real charges invisible on this screen (only found by navigating to
+      // Orders separately).
+      const results = await Promise.allSettled(
         Array.from({ length: quantity }, () =>
-          api.post<{ id: string; number: string; service: string; country: string; createdAt: string; expiresAt: string; providerName: string; providerServer: string; price: number }>(
-            "/api/otp/buy",
-            { providerId: fresh.providerId, countryCode: fresh.countryCode, serviceId: fresh.id },
-          ),
+          api.post<BuyResult>("/api/otp/buy", { providerId: fresh.providerId, countryCode: fresh.countryCode, serviceId: fresh.id }),
         ),
       );
-      const rows: PurchasedNumber[] = results.map((r) => ({
-        id: r.id,
-        number: r.number,
-        service: r.service,
-        country: r.country,
-        createdAt: r.createdAt,
-        expiresAt: r.expiresAt ?? new Date(Date.now() + RESERVE_MS).toISOString(),
-        providerName: r.providerName,
-        providerServer: r.providerServer,
-        price: r.price,
-        otp: null,
-      }));
-      setPurchased((p) => [...rows, ...p]);
-      if (rows[0]?.number) {
-        navigator.clipboard.writeText(rows[0].number).catch(() => {});
+      const succeeded = results
+        .filter((r): r is PromiseFulfilledResult<BuyResult> => r.status === "fulfilled")
+        .map((r) => r.value);
+      const failed = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+
+      if (succeeded.length > 0) {
+        const rows: PurchasedNumber[] = succeeded.map((r) => ({
+          id: r.id,
+          number: r.number,
+          service: r.service,
+          country: r.country,
+          createdAt: r.createdAt,
+          expiresAt: r.expiresAt ?? new Date(Date.now() + RESERVE_MS).toISOString(),
+          providerName: r.providerName,
+          providerServer: r.providerServer,
+          price: r.price,
+          otp: null,
+        }));
+        setPurchased((p) => [...rows, ...p]);
+        if (rows[0]?.number) {
+          navigator.clipboard.writeText(rows[0].number).catch(() => {});
+        }
+        queryClient.invalidateQueries({ queryKey: ["wallet"] });
       }
-      toast.success(`${quantity} number${quantity > 1 ? "s" : ""} reserved`);
+
+      if (failed.length === 0) {
+        toast.success(`${quantity} number${quantity > 1 ? "s" : ""} reserved`);
+      } else if (succeeded.length > 0) {
+        const reason = failed[0].reason instanceof Error ? failed[0].reason.message : "unknown error";
+        toast.warning(`${succeeded.length}/${quantity} reserved — ${failed.length} failed (${reason}). Charged numbers are listed below.`);
+      } else {
+        const reason = failed[0].reason instanceof Error ? failed[0].reason.message : "Purchase failed";
+        toast.error(reason);
+      }
     } catch (e) {
       toast.error((e as Error).message);
     } finally {
@@ -194,8 +215,15 @@ export default function BuyNumber() {
     for (const row of expired) {
       if (refundNotified.has(row.id)) continue;
       refundNotified.add(row.id);
-      cancelAndRefund(row.id, true).then(() => {
-        toast.message(`${row.service} expired · ₹${row.price.toFixed(2)} refunded`);
+      cancelAndRefund(row.id, true).then((refunded) => {
+        if (refunded) {
+          toast.message(`${row.service} expired · ₹${row.price.toFixed(2)} refunded`);
+        } else {
+          // The cancel didn't actually succeed (most likely the OTP arrived
+          // right at the expiry boundary and the order is now fulfilled,
+          // not refundable) — never claim money moved when it didn't.
+          toast.error(`${row.service} expired — couldn't confirm a refund. Check your Orders page.`);
+        }
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,20 +233,29 @@ export default function BuyNumber() {
     navigator.clipboard.writeText(v);
     toast.success(label);
   };
-  const cancelAndRefund = async (id: string, silent = false) => {
+  /** Returns whether a refund actually happened — callers must not claim
+   * success without checking this. Previously `silent` mode swallowed every
+   * error with no way for the caller to tell, so the auto-expiry effect
+   * below showed "refunded" unconditionally even when the cancel request
+   * failed (e.g. the OTP arrived at the exact moment of expiry, so the
+   * backend correctly refuses to cancel an already-fulfilled order — no
+   * refund happens, but the UI said one did). */
+  const cancelAndRefund = async (id: string, silent = false): Promise<boolean> => {
     const row = purchased.find((p) => p.id === id);
-    if (!row) return;
+    if (!row) return false;
     if (row.otp) {
       setPurchased((p) => p.filter((x) => x.id !== id));
-      return;
+      return false;
     }
     try {
       const res = await api.post<{ refunded: boolean }>("/api/otp/cancel", { orderId: id });
       setPurchased((p) => p.filter((x) => x.id !== id));
       queryClient.invalidateQueries({ queryKey: ["wallet"] });
       if (res.refunded && !silent) toast.success(`Number cancelled · ₹${row.price.toFixed(2)} refunded`);
+      return Boolean(res.refunded);
     } catch (e) {
       if (!silent) toast.error((e as Error).message);
+      return false;
     }
   };
   const fmtRemaining = (iso: string) => {
@@ -376,7 +413,10 @@ export default function BuyNumber() {
                             size="sm"
                             variant="ghost"
                             disabled={!canCancel}
-                            onClick={() => cancelAndRefund(p.id)}
+                            onClick={() => {
+                              if (!p.otp && !confirm(`Cancel this number and refund ₹${p.price.toFixed(2)}?`)) return;
+                              cancelAndRefund(p.id);
+                            }}
                             title={p.otp ? "Remove" : canCancel ? "Cancel & refund" : `Cancel available in ${wait}s`}
                           >
                             {canCancel ? <X className="h-3.5 w-3.5" /> : <span className="text-[11px] tabular-nums">{wait}s</span>}

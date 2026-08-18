@@ -92,6 +92,17 @@ adminRouter.post("/admins/revoke", async (req, res) => {
     const { user_id, role } = req.body ?? {};
     if (!user_id || !role) throw new Error("user_id and role required");
     const users = await getCollection<UserDoc>("users");
+    if (role === "admin") {
+      // Refuse to leave the system with zero admins — every /api/admin/*
+      // route (including this one) requires the admin role, so hitting
+      // zero is an unrecoverable lockout with no way back in except a
+      // direct database edit.
+      const adminCount = await users.countDocuments({ roles: "admin" });
+      const target = await users.findOne({ _id: String(user_id) });
+      if (target?.roles.includes("admin") && adminCount <= 1) {
+        throw new Error("Can't remove the last admin — promote someone else first");
+      }
+    }
     const result = await users.updateOne({ _id: String(user_id) }, { $pull: { roles: role } });
     if (result.matchedCount === 0) throw new Error("User not found");
     res.json({ ok: true });
@@ -105,6 +116,16 @@ adminRouter.post("/users/:id/role", async (req, res) => {
     const { role, add } = req.body ?? {};
     if (!role) throw new Error("role required");
     const users = await getCollection<UserDoc>("users");
+    if (!add && role === "admin") {
+      // Same last-admin floor check as /admins/revoke — this route reaches
+      // the same $pull on roles from a different admin UI (user edit
+      // dialog), so it needs the same guard.
+      const adminCount = await users.countDocuments({ roles: "admin" });
+      const target = await users.findOne({ _id: req.params.id });
+      if (target?.roles.includes("admin") && adminCount <= 1) {
+        throw new Error("Can't remove the last admin — promote someone else first");
+      }
+    }
     const result = await users.updateOne(
       { _id: req.params.id },
       add ? { $addToSet: { roles: role } } : { $pull: { roles: role } },
@@ -1545,8 +1566,32 @@ async function updateManagedOrderStatus(id: string, next: ManagedOrderStatus): P
   };
   const dbStatus = map[next] ?? "pending";
   const orders = await getCollection<OrderDoc>("orders");
-  const result = await orders.updateOne({ _id: id }, { $set: { status: dbStatus } });
-  if (result.matchedCount === 0) throw new Error("Order not found");
+
+  if (dbStatus === "cancelled" || dbStatus === "expired") {
+    // Cancelling/rejecting an order from this screen must refund the
+    // wallet the same way the customer-facing POST /api/otp/cancel does —
+    // this used to just flip the raw orders.status field directly with
+    // zero money movement, so an admin cancelling a paid order left the
+    // customer permanently un-refunded with nothing flagging it.
+    // refundOrder sets the order's final status to "refunded" itself
+    // (loadManagedOrders already maps DB "refunded" back to the
+    // "cancelled" ManagedOrderStatus for display — see below), matching
+    // the same status POST /api/otp/status's late-OTP guard checks for.
+    const { refundOrder } = await import("../lib/db/wallet.ts");
+    try {
+      await refundOrder(id, `Order management: marked ${next} by admin`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Already refunded, or the OTP already arrived (can't refund a
+      // fulfilled order) — both are legitimate terminal states reached by
+      // some other path already, not failures of this action.
+      if (!/already refunded|already received/i.test(msg)) throw err;
+    }
+  } else {
+    const result = await orders.updateOne({ _id: id }, { $set: { status: dbStatus } });
+    if (result.matchedCount === 0) throw new Error("Order not found");
+  }
+
   const items = await loadManagedOrders();
   const item = items.find((o) => o.id === id);
   if (!item) throw new Error("Order not found");

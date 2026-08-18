@@ -102,6 +102,13 @@ async function main() {
   await db.collection("paytm_sessions").createIndex({ orderId: 1 }, { unique: true });
   await db.collection("paytm_sessions").createIndex({ userId: 1, createdAt: -1 });
   await db.collection("paytm_sessions").createIndex({ status: 1, expiresAt: 1 });
+  // Defense-in-depth alongside the app-level duplicate-txnId check in
+  // creditPaytmSession: no two *paid* sessions can ever share the same
+  // txnId, even if a future code path forgets the application-level guard.
+  await db.collection("paytm_sessions").createIndex(
+    { txnId: 1 },
+    { unique: true, partialFilterExpression: { status: "paid", txnId: { $type: "string" } } },
+  );
 
   // rate limiting (service-only collection)
   await db.collection("rate_limits").createIndex({ bucket: 1, key: 1 }, { unique: true });

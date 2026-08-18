@@ -472,7 +472,15 @@ providersRouter.patch("/:id", async (req, res) => {
     if (patch.name !== undefined) set.name = patch.name;
     if (patch.serverName !== undefined) set.serverName = patch.serverName;
     if (patch.baseUrl !== undefined) set.apiBaseUrl = patch.baseUrl;
-    if (patch.apiKey !== undefined) set.apiKeyMasked = patch.apiKey;
+    // apiKeyMasked must always hold an already-masked value — GET /public
+    // (no auth) and GET /:id both return it verbatim (see mapRow). The
+    // create route (POST /, below) already masks correctly; this used to
+    // store whatever the client sent here as-is, so editing a provider's
+    // key from the admin form persisted the real key in plaintext and made
+    // it readable by anyone hitting the unauthenticated /public endpoint.
+    if (patch.apiKey !== undefined) {
+      set.apiKeyMasked = patch.apiKey ? `${patch.apiKey.slice(0, 4)}••••${patch.apiKey.slice(-2)}` : null;
+    }
     if (patch.status !== undefined) set.status = patch.status;
     if (patch.enabledInSandbox !== undefined) set.enabledInSandbox = patch.enabledInSandbox;
     if (patch.enabledInProduction !== undefined) set.enabledInProduction = patch.enabledInProduction;

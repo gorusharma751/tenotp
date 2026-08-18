@@ -86,7 +86,14 @@ export default function Page() {
           <div className="flex gap-1">
             <AdjustDialog userId={w.userId} userLabel={w.user || w.email} direction="credit" icon={Plus} />
             <AdjustDialog userId={w.userId} userLabel={w.user || w.email} direction="debit" icon={Minus} />
-            <Button variant="ghost" size="icon" title={w.frozen ? "Unfreeze wallet" : "Freeze wallet"} onClick={() => freezeM.mutate({ userId: w.userId, frozen: !w.frozen })}>
+            <Button
+              variant="ghost" size="icon" title={w.frozen ? "Unfreeze wallet" : "Freeze wallet"}
+              onClick={() => {
+                const label = w.user || w.email;
+                const msg = w.frozen ? `Unfreeze ${label}'s wallet? They'll be able to spend/deposit again.` : `Freeze ${label}'s wallet? They won't be able to spend or deposit until unfrozen.`;
+                if (confirm(msg)) freezeM.mutate({ userId: w.userId, frozen: !w.frozen });
+              }}
+            >
               {w.frozen ? <Sun className="h-4 w-4 text-amber-500" /> : <Snowflake className="h-4 w-4" />}
             </Button>
           </div>

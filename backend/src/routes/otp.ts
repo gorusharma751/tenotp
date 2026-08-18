@@ -286,6 +286,14 @@ otpRouter.post("/status", requireAuth, async (req, res) => {
     if (!order) throw new Error("Order not found");
     if (order.userId !== req.auth.userId && !req.auth.roles.includes("admin")) throw new Error("Forbidden");
     if (order.otp) return res.json({ status: "received", otp: order.otp });
+    // Once refunded/cancelled the wallet has already been credited back —
+    // never let a late-arriving upstream OTP flip the order back to
+    // "received" (that would hand out a free OTP for a number the user was
+    // already refunded for; most SMS-activation upstreams don't deactivate
+    // a number instantly on cancel, so this is genuinely reachable).
+    if (order.status === "refunded" || order.status === "cancelled") {
+      return res.json({ status: order.status, otp: null });
+    }
 
     const operator = String(order.operator ?? "");
     const kindMap: Array<[string, "grizzlysms" | "tigersms" | "smsbower" | "sastasms" | "fivesim"]> = [

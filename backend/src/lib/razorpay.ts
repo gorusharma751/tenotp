@@ -145,22 +145,39 @@ export async function verifyRazorpayPayment(
     };
   }
 
-  const depositId = crypto.randomUUID();
-  await deposits.insertOne({
-    _id: depositId,
-    userId,
-    amount,
-    method: "Razorpay",
-    currency: "INR",
-    network: null,
-    utr: data.razorpay_payment_id,
-    screenshotUrl: null,
-    status: "pending",
-    adminNote: `Razorpay verified · order ${data.razorpay_order_id}`,
-    approvedBy: null,
-    approvedAt: null,
-    createdAt: new Date(),
-  });
+  // Deterministic _id (not a random UUID) — MongoDB enforces uniqueness on
+  // _id automatically, so this is the atomic guard against two concurrent
+  // verify calls for the *same* payment_id (double-click, a client retry
+  // racing the original request, deliberate replay) both passing the
+  // findOne-based `existing` check above before either insert commits and
+  // both crediting the wallet. Whichever insert loses the race gets a
+  // duplicate-key error instead of silently succeeding a second time.
+  const depositId = `razorpay:${data.razorpay_payment_id}`;
+  try {
+    await deposits.insertOne({
+      _id: depositId,
+      userId,
+      amount,
+      method: "Razorpay",
+      currency: "INR",
+      network: null,
+      utr: data.razorpay_payment_id,
+      screenshotUrl: null,
+      status: "pending",
+      adminNote: `Razorpay verified · order ${data.razorpay_order_id}`,
+      approvedBy: null,
+      approvedAt: null,
+      createdAt: new Date(),
+    });
+  } catch (err) {
+    if ((err as { code?: number })?.code === 11000) {
+      // Lost the race — the other concurrent call's insert won and will
+      // credit the wallet (or already has). Not an error.
+      const user = await users.findOne({ _id: userId });
+      return { ok: true, credited: false, balance: Number(user?.walletBalance ?? 0), deposit_id: depositId };
+    }
+    throw err;
+  }
 
   // Wallet credit always goes through the transactional money engine.
   const newBalance = await approveDeposit(depositId);

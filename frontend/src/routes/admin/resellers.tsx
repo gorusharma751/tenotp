@@ -384,7 +384,10 @@ function DetailDialog({ panel }: { panel: ResellerPanel }) {
                     <p className="text-xs text-muted-foreground">{m.email} · wallet {money(m.wallet_balance)}</p>
                   </div>
                   {!m.is_owner && (
-                    <Button variant="ghost" size="icon" title="Remove from panel" onClick={() => removeM.mutate(m.id)}>
+                    <Button
+                      variant="ghost" size="icon" title="Remove from panel"
+                      onClick={() => { if (confirm(`Remove ${m.name} from this panel? Their future purchases will go back to standard pricing.`)) removeM.mutate(m.id); }}
+                    >
                       <UserMinus className="h-4 w-4 text-destructive" />
                     </Button>
                   )}

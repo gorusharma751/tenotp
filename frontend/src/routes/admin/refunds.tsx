@@ -6,10 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { api } from "@/lib/apiClient";
 import { money, dateTime } from "@/utils/format";
-import { toast } from "sonner";
 import { Check, X } from "lucide-react";
 import type { Refund } from "@/types";
 
+// TODO(backend): the "refunds" collection is read-only from GET
+// /api/admin/refunds and nothing anywhere ever writes to it — there's no
+// user-facing "request a refund" flow and no admin approve/reject
+// endpoint, so this table will always be empty in practice and the two
+// action buttons used to fake success with a toast and no network call at
+// all. (Real refunds already happen automatically and atomically via
+// POST /api/otp/cancel → refundOrder — this page was for a separate
+// manual-request flow that was never built.) Left honestly disabled.
 export default function Page() {
   const q = useQuery({ queryKey: ["admin", "refunds"], queryFn: () => api.get<Refund[]>("/api/admin/refunds") });
   const all = q.data ?? [];
@@ -25,8 +32,8 @@ export default function Page() {
     { key: "d", header: "Date", cell: (r: Refund) => <span className="text-xs">{dateTime(r.createdAt)}</span> },
     { key: "act", header: "", cell: (r: Refund) => (
       <div className="flex gap-1">
-        <Button variant="ghost" size="icon" disabled={r.status !== "pending"} onClick={() => toast.success("Approved")}><Check className="h-4 w-4 text-success" /></Button>
-        <Button variant="ghost" size="icon" disabled={r.status !== "pending"} onClick={() => toast.error("Rejected")}><X className="h-4 w-4 text-destructive" /></Button>
+        <Button variant="ghost" size="icon" disabled title="No backend endpoint yet"><Check className="h-4 w-4 text-success" /></Button>
+        <Button variant="ghost" size="icon" disabled title="No backend endpoint yet"><X className="h-4 w-4 text-destructive" /></Button>
       </div>
     ) },
   ];

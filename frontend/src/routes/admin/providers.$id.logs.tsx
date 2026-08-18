@@ -20,7 +20,7 @@ function ProviderLogsPage() {
         <Link to={"/gourav-ankit-adi/providers/$id" as any} params={{ id } as any}><ArrowLeft className="h-4 w-4 mr-1" />Provider</Link>
       </Button>
       <PageHeader title="API request logs" description="Every request and response to this provider." actions={
-        <Button size="sm" variant="outline" onClick={() => actions.clearLogs.mutate()} disabled={actions.clearLogs.isPending}>
+        <Button size="sm" variant="outline" onClick={() => { if (confirm("Clear all request logs for this provider? This can't be undone.")) actions.clearLogs.mutate(); }} disabled={actions.clearLogs.isPending}>
           <Trash2 className="h-4 w-4 mr-1" />Clear
         </Button>
       } />

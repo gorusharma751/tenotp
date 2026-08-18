@@ -112,8 +112,13 @@ authRouter.post("/password-reset/request", async (req, res) => {
     const users = await usersCollection();
     const doc = await users.findOne({ emailLower: email.toLowerCase() });
     if (!doc) return res.json({ ok: true }); // no user enumeration
-    const { signSessionToken: sign } = await import("../lib/auth/jwt.ts");
-    const token = sign({ sub: doc._id, email: doc.email, roles: ["password_reset"] });
+    const { signPasswordResetToken } = await import("../lib/auth/jwt.ts");
+    // Requesting a fresh link invalidates any earlier one for this user —
+    // bump the version now, not just on confirm, so an old leaked/cached
+    // reset email stops working the moment a newer one is requested.
+    const nextVersion = (doc.passwordResetVersion ?? 0) + 1;
+    await users.updateOne({ _id: doc._id }, { $set: { passwordResetVersion: nextVersion } });
+    const token = signPasswordResetToken({ sub: doc._id, email: doc.email, roles: ["password_reset"] }, nextVersion);
     const { sendPasswordResetEmail } = await import("../lib/email.ts");
     const appUrl = process.env.APP_URL || "";
     await sendPasswordResetEmail({ to: doc.email, resetUrl: `${appUrl}/reset-password?token=${token}` });
@@ -126,11 +131,21 @@ authRouter.post("/password-reset/request", async (req, res) => {
 authRouter.post("/password-reset/confirm", async (req, res) => {
   try {
     const newPassword = passwordSchema.parse(req.body?.newPassword);
-    const { verifySessionToken } = await import("../lib/auth/jwt.ts");
+    const { verifyPasswordResetToken, verifySessionToken } = await import("../lib/auth/jwt.ts");
+    const users = await usersCollection();
     let userId: string | null = null;
     if (req.body?.resetToken) {
-      const claims = verifySessionToken(String(req.body.resetToken));
-      if (claims?.roles.includes("password_reset")) userId = claims.sub;
+      // Single-use: the token's embedded resetVersion must still match the
+      // user's current version. It won't if this exact link was already
+      // used once (confirm below bumps the version on success) or if a
+      // newer reset was requested since (request bumps it too) — either
+      // way the token 400s here instead of quietly working again.
+      const claims = verifyPasswordResetToken(String(req.body.resetToken));
+      if (claims) {
+        const doc = await users.findOne({ _id: claims.sub });
+        if (doc && (doc.passwordResetVersion ?? 0) === claims.resetVersion) userId = claims.sub;
+        else if (doc) throw new Error("This reset link was already used or has been superseded — request a new one");
+      }
     }
     if (!userId) {
       const header = req.headers.authorization;
@@ -141,8 +156,11 @@ authRouter.post("/password-reset/confirm", async (req, res) => {
     }
     if (!userId) throw new Error("Your session expired — please sign in again");
     const passwordHash = await hashPassword(newPassword);
-    const users = await usersCollection();
-    await users.updateOne({ _id: userId }, { $set: { passwordHash, updatedAt: new Date() } });
+    const doc = await users.findOne({ _id: userId });
+    await users.updateOne(
+      { _id: userId },
+      { $set: { passwordHash, updatedAt: new Date(), passwordResetVersion: (doc?.passwordResetVersion ?? 0) + 1 } },
+    );
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Failed" });

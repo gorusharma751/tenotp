@@ -68,7 +68,7 @@ export default function AdminDeposits() {
         <Button
           variant="ghost" size="icon" disabled={d.status !== "pending" || approveM.isPending}
           title="Approve — credit the wallet"
-          onClick={() => approveM.mutate(d.id)}
+          onClick={() => { if (confirm(`Approve this ₹${d.amount} deposit? This immediately credits the user's wallet.`)) approveM.mutate(d.id); }}
         >
           <Check className="h-4 w-4 text-success" />
         </Button>
