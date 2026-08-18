@@ -134,9 +134,22 @@ function PaytmPanel() {
     upi_id: "",
     payee_name: "",
   });
+  // Guards against react-query's default refetchOnWindowFocus silently
+  // clobbering in-progress edits: switching tabs to copy a key from
+  // BharatPe/Paytm's own dashboard (the exact natural workflow for filling
+  // this form) refetches this query in the background, and without this
+  // guard the sync effect below would overwrite whatever the admin had
+  // just typed/toggled — including "Enabled" — back to the last-saved
+  // server value with zero indication anything happened. That's what made
+  // every toggle/save on this page look broken.
+  const [dirty, setDirty] = useState(false);
+  const update = (patch: Partial<typeof form>) => {
+    setForm((f) => ({ ...f, ...patch }));
+    setDirty(true);
+  };
 
   useEffect(() => {
-    if (q.data) {
+    if (q.data && !dirty) {
       setForm((f) => ({
         ...f,
         env: q.data.env,
@@ -147,13 +160,14 @@ function PaytmPanel() {
         payee_name: q.data.payee_name || "",
       }));
     }
-  }, [q.data]);
+  }, [q.data, dirty]);
 
   const saveM = useMutation({
     mutationFn: () => api.post<{ ok: boolean; webhook_token: string }>("/api/payments/paytm/admin-config", form),
     onSuccess: () => {
       toast.success("Paytm config saved");
       setForm((f) => ({ ...f, merchant_key: "" }));
+      setDirty(false);
       qc.invalidateQueries({ queryKey: ["admin", "settings", "paytm"] });
     },
     onError: (e: any) => toast.error(e?.message || "Could not save Paytm config"),
@@ -170,7 +184,7 @@ function PaytmPanel() {
       <CardContent className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-1.5">
           <Label>Mode</Label>
-          <Select value={form.mode} onValueChange={(v) => setForm({ ...form, mode: v as "upi" | "gateway" })}>
+          <Select value={form.mode} onValueChange={(v) => update({ mode: v as "upi" | "gateway" })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="upi">Direct UPI (no gateway keys needed)</SelectItem>
@@ -180,7 +194,7 @@ function PaytmPanel() {
         </div>
         <div className="grid gap-1.5">
           <Label>Environment</Label>
-          <Select value={form.env} onValueChange={(v) => setForm({ ...form, env: v as "production" | "staging" })}>
+          <Select value={form.env} onValueChange={(v) => update({ env: v as "production" | "staging" })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="production">Production</SelectItem>
@@ -190,19 +204,19 @@ function PaytmPanel() {
         </div>
         <div className="grid gap-1.5">
           <Label>MID</Label>
-          <Input value={form.mid} onChange={(e) => setForm({ ...form, mid: e.target.value })} placeholder={q.data?.mid || "Merchant ID"} />
+          <Input value={form.mid} onChange={(e) => update({ mid: e.target.value })} placeholder={q.data?.mid || "Merchant ID"} />
         </div>
         <div className="grid gap-1.5">
           <Label>Merchant key</Label>
-          <Input type="password" value={form.merchant_key} onChange={(e) => setForm({ ...form, merchant_key: e.target.value })} placeholder={q.data?.key_masked || "paste merchant key"} />
+          <Input type="password" value={form.merchant_key} onChange={(e) => update({ merchant_key: e.target.value })} placeholder={q.data?.key_masked || "paste merchant key"} />
         </div>
         <div className="grid gap-1.5">
           <Label>Merchant UPI ID</Label>
-          <Input value={form.upi_id} onChange={(e) => setForm({ ...form, upi_id: e.target.value })} placeholder="merchant@paytm" />
+          <Input value={form.upi_id} onChange={(e) => update({ upi_id: e.target.value })} placeholder="merchant@paytm" />
         </div>
         <div className="grid gap-1.5">
           <Label>Payee name</Label>
-          <Input value={form.payee_name} onChange={(e) => setForm({ ...form, payee_name: e.target.value })} />
+          <Input value={form.payee_name} onChange={(e) => update({ payee_name: e.target.value })} />
         </div>
         <div className="grid gap-1.5">
           <Label>QR TTL (minutes)</Label>
@@ -211,11 +225,11 @@ function PaytmPanel() {
             min={1}
             max={30}
             value={form.qr_ttl_minutes}
-            onChange={(e) => setForm({ ...form, qr_ttl_minutes: Number(e.target.value) || 5 })}
+            onChange={(e) => update({ qr_ttl_minutes: Number(e.target.value) || 5 })}
           />
         </div>
         <div className="flex items-center gap-3 pt-6">
-          <Switch id="paytm-enabled" checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />
+          <Switch id="paytm-enabled" checked={form.enabled} onCheckedChange={(v) => update({ enabled: v })} />
           <Label htmlFor="paytm-enabled">Enabled for live deposits</Label>
         </div>
         <div className="sm:col-span-2">
@@ -273,9 +287,19 @@ function BharatpePanel() {
     qr_image_url: "",
     show_upi_apps: false,
   });
+  // Same fix as PaytmPanel: without this, react-query's default
+  // refetchOnWindowFocus (switching to BharatPe's dashboard to copy the
+  // token, then back — the exact workflow this form is for) silently
+  // overwrote in-progress edits, including the Enabled toggle, back to
+  // the last-saved server value.
+  const [dirty, setDirty] = useState(false);
+  const update = (patch: Partial<typeof form>) => {
+    setForm((f) => ({ ...f, ...patch }));
+    setDirty(true);
+  };
 
   useEffect(() => {
-    if (q.data) {
+    if (q.data && !dirty) {
       setForm((f) => ({
         ...f,
         merchant_id: q.data.merchant_id || "",
@@ -288,7 +312,7 @@ function BharatpePanel() {
         show_upi_apps: q.data.show_upi_apps,
       }));
     }
-  }, [q.data]);
+  }, [q.data, dirty]);
 
   const saveM = useMutation({
     mutationFn: () =>
@@ -306,6 +330,7 @@ function BharatpePanel() {
     onSuccess: () => {
       toast.success("BharatPe config saved");
       setForm((f) => ({ ...f, access_token: "" }));
+      setDirty(false);
       qc.invalidateQueries({ queryKey: ["admin", "settings", "bharatpe"] });
       testM.mutate();
     },
@@ -355,32 +380,32 @@ function BharatpePanel() {
       <CardContent className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-1.5">
           <Label>Merchant ID</Label>
-          <Input value={form.merchant_id} onChange={(e) => setForm({ ...form, merchant_id: e.target.value })} />
+          <Input value={form.merchant_id} onChange={(e) => update({ merchant_id: e.target.value })} />
         </div>
         <div className="grid gap-1.5">
           <Label>Merchant UPI ID</Label>
-          <Input value={form.upi_id} onChange={(e) => setForm({ ...form, upi_id: e.target.value })} placeholder="merchant@upi" />
+          <Input value={form.upi_id} onChange={(e) => update({ upi_id: e.target.value })} placeholder="merchant@upi" />
         </div>
         <div className="grid gap-1.5">
           <Label>Payee name</Label>
-          <Input value={form.payee_name} onChange={(e) => setForm({ ...form, payee_name: e.target.value })} />
+          <Input value={form.payee_name} onChange={(e) => update({ payee_name: e.target.value })} />
         </div>
         <div className="grid gap-1.5">
           <Label>Access token</Label>
           <Input
             type="password"
             value={form.access_token}
-            onChange={(e) => setForm({ ...form, access_token: e.target.value })}
+            onChange={(e) => update({ access_token: e.target.value })}
             placeholder={q.data?.access_token_masked || "paste BharatPe access token"}
           />
         </div>
         <div className="grid gap-1.5">
           <Label>Transactions API URL (optional)</Label>
-          <Input value={form.api_url} onChange={(e) => setForm({ ...form, api_url: e.target.value })} placeholder="https://payments-tesseract.bharatpe.in (default)" />
+          <Input value={form.api_url} onChange={(e) => update({ api_url: e.target.value })} placeholder="https://payments-tesseract.bharatpe.in (default)" />
         </div>
         <div className="grid gap-1.5">
           <Label>QR image URL (optional)</Label>
-          <Input value={form.qr_image_url} onChange={(e) => setForm({ ...form, qr_image_url: e.target.value })} placeholder="https://... or leave blank" />
+          <Input value={form.qr_image_url} onChange={(e) => update({ qr_image_url: e.target.value })} placeholder="https://... or leave blank" />
         </div>
         <div className="grid gap-1.5">
           <Label>QR TTL (minutes)</Label>
@@ -389,15 +414,15 @@ function BharatpePanel() {
             min={1}
             max={30}
             value={form.qr_ttl_minutes}
-            onChange={(e) => setForm({ ...form, qr_ttl_minutes: Number(e.target.value) || 5 })}
+            onChange={(e) => update({ qr_ttl_minutes: Number(e.target.value) || 5 })}
           />
         </div>
         <div className="flex items-center gap-3 pt-6">
-          <Switch id="bpe-enabled" checked={form.enabled} onCheckedChange={(v) => setForm({ ...form, enabled: v })} />
+          <Switch id="bpe-enabled" checked={form.enabled} onCheckedChange={(v) => update({ enabled: v })} />
           <Label htmlFor="bpe-enabled">Enabled for live deposits</Label>
         </div>
         <div className="flex items-center gap-3">
-          <Switch id="bpe-apps" checked={form.show_upi_apps} onCheckedChange={(v) => setForm({ ...form, show_upi_apps: v })} />
+          <Switch id="bpe-apps" checked={form.show_upi_apps} onCheckedChange={(v) => update({ show_upi_apps: v })} />
           <Label htmlFor="bpe-apps">Show "open in UPI app" buttons</Label>
         </div>
         {q.data?.token_message && <p className="sm:col-span-2 text-xs text-muted-foreground">{q.data.token_message}</p>}
@@ -493,8 +518,14 @@ function ContactLinksPanel() {
     announcementText: "",
   });
 
+  const [dirty, setDirty] = useState(false);
+  const update = (patch: Partial<typeof form>) => {
+    setForm((f) => ({ ...f, ...patch }));
+    setDirty(true);
+  };
+
   useEffect(() => {
-    if (q.data) {
+    if (q.data && !dirty) {
       setForm({
         telegramGroup: q.data.telegramGroup,
         telegramSupport: q.data.telegramSupport,
@@ -503,12 +534,13 @@ function ContactLinksPanel() {
         announcementText: q.data.announcementText,
       });
     }
-  }, [q.data]);
+  }, [q.data, dirty]);
 
   const saveM = useMutation({
     mutationFn: (bumpVersion: boolean) => api.post<{ ok: boolean }>("/api/admin/contact-links", { ...form, bumpVersion }),
     onSuccess: () => {
       toast.success("Contact links saved");
+      setDirty(false);
       qc.invalidateQueries({ queryKey: ["admin", "settings", "contact-links"] });
     },
     onError: (e: any) => toast.error(e?.message || "Could not save contact links"),
@@ -522,23 +554,23 @@ function ContactLinksPanel() {
       <CardContent className="grid gap-4 sm:grid-cols-2">
         <div className="grid gap-1.5">
           <Label>Telegram group URL</Label>
-          <Input value={form.telegramGroup} onChange={(e) => setForm({ ...form, telegramGroup: e.target.value })} placeholder="https://t.me/..." />
+          <Input value={form.telegramGroup} onChange={(e) => update({ telegramGroup: e.target.value })} placeholder="https://t.me/..." />
         </div>
         <div className="grid gap-1.5">
           <Label>Telegram support URL</Label>
-          <Input value={form.telegramSupport} onChange={(e) => setForm({ ...form, telegramSupport: e.target.value })} placeholder="https://t.me/..." />
+          <Input value={form.telegramSupport} onChange={(e) => update({ telegramSupport: e.target.value })} placeholder="https://t.me/..." />
         </div>
         <div className="grid gap-1.5">
           <Label>WhatsApp URL</Label>
-          <Input value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} placeholder="https://wa.me/..." />
+          <Input value={form.whatsapp} onChange={(e) => update({ whatsapp: e.target.value })} placeholder="https://wa.me/..." />
         </div>
         <div className="grid gap-1.5">
           <Label>Announcement title</Label>
-          <Input value={form.announcementTitle} onChange={(e) => setForm({ ...form, announcementTitle: e.target.value })} />
+          <Input value={form.announcementTitle} onChange={(e) => update({ announcementTitle: e.target.value })} />
         </div>
         <div className="sm:col-span-2 grid gap-1.5">
           <Label>Announcement text</Label>
-          <Input value={form.announcementText} onChange={(e) => setForm({ ...form, announcementText: e.target.value })} />
+          <Input value={form.announcementText} onChange={(e) => update({ announcementText: e.target.value })} />
         </div>
         <div className="sm:col-span-2 flex flex-wrap gap-2">
           <Button onClick={() => saveM.mutate(false)} disabled={saveM.isPending}>
