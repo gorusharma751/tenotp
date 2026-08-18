@@ -49,7 +49,14 @@ export default function Overview() {
       {/* Welcome */}
       <Card className="shadow-glow border-primary/10 mb-6 overflow-hidden">
         <CardContent className="p-6 grid gap-4 md:grid-cols-[1fr_auto] items-center relative">
-          <div className="absolute -right-8 -top-8 h-40 w-40 rounded-full bg-primary/10 blur-3xl -z-10" />
+          {/* Purely decorative glow — `-z-10` should already keep it behind
+              real content, but a filter (blur-3xl) + negative z-index +
+              absolute positioning is exactly the kind of combination that
+              can hit-test inconsistently on some mobile browser engines.
+              pointer-events-none removes any doubt: this element can never
+              intercept a tap meant for the buttons next to it, regardless
+              of how any given browser computes its stacking. */}
+          <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full bg-primary/10 blur-3xl -z-10" />
           <div>
             <p className="text-sm text-muted-foreground">Welcome back</p>
             <h1 className="text-2xl sm:text-3xl font-bold mt-1">{user?.name ?? "there"} 👋</h1>
