@@ -331,24 +331,27 @@ function AdminProviders() {
           ) : (
             <div className="overflow-x-auto">
               <Table>
+                {/* 11 columns doesn't fit a phone screen — a sticky Actions
+                    column turned out unreliable across mobile browsers
+                    (reported as still not visible even after that fix), so
+                    instead the least essential columns are hidden below
+                    the `md` breakpoint. That keeps Provider/Status/Live/
+                    Actions on-screen without ANY horizontal scroll needed
+                    on a phone — nothing to get cut off. Full detail
+                    (Server/Category/Env/Health/Success/Latency) still
+                    shows on tablet/desktop. */}
                 <TableHeader><TableRow>
                   <TableHead>Provider</TableHead>
-                  <TableHead>Server</TableHead>
-                  <TableHead>Category</TableHead>
-                  <TableHead>Env</TableHead>
+                  <TableHead className="hidden md:table-cell">Server</TableHead>
+                  <TableHead className="hidden md:table-cell">Category</TableHead>
+                  <TableHead className="hidden md:table-cell">Env</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Health</TableHead>
+                  <TableHead className="hidden md:table-cell">Health</TableHead>
                   <TableHead className="text-right">Markup</TableHead>
                   <TableHead className="text-center">Live</TableHead>
-                  <TableHead className="text-right">Success</TableHead>
-                  <TableHead className="text-right">Latency</TableHead>
-                  {/* 11 columns is wide enough to need horizontal scroll on
-                      phones — a plain scrolling table hides Actions off
-                      the right edge with no visual hint it's there at all,
-                      which read as "the buttons are just missing". Sticky
-                      + shadow keeps it pinned in view and visually
-                      separated regardless of scroll position. */}
-                  <TableHead className="text-right sticky right-0 bg-card shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]">Actions</TableHead>
+                  <TableHead className="text-right hidden md:table-cell">Success</TableHead>
+                  <TableHead className="text-right hidden md:table-cell">Latency</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
                 </TableRow></TableHeader>
                 <TableBody>
                   {(list.data ?? []).map((p) => (
@@ -362,13 +365,13 @@ function AdminProviders() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell className="text-xs font-mono">{p.serverName ?? "—"}</TableCell>
-                      <TableCell><Badge variant="secondary">{p.category}</Badge></TableCell>
-                      <TableCell className="text-xs">{p.environment}</TableCell>
+                      <TableCell className="text-xs font-mono hidden md:table-cell">{p.serverName ?? "—"}</TableCell>
+                      <TableCell className="hidden md:table-cell"><Badge variant="secondary">{p.category}</Badge></TableCell>
+                      <TableCell className="text-xs hidden md:table-cell">{p.environment}</TableCell>
                       <TableCell>
                         <ProviderStatusBadge status={(healthById.get(p.id)?.status as any) ?? p.status} />
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden md:table-cell">
                         {healthById.get(p.id)
                           ? <ProviderHealthPill health={healthById.get(p.id)!.ok ? "healthy" : "down"} />
                           : <ProviderHealthPill health={p.health} />}
@@ -379,9 +382,9 @@ function AdminProviders() {
                       <TableCell className="text-center">
                         <Switch checked={!!p.enabledInProduction} onCheckedChange={(v) => toggleLive(p, v)} />
                       </TableCell>
-                      <TableCell className="text-right">{p.successRate}%</TableCell>
-                      <TableCell className="text-right tabular-nums">{healthById.get(p.id)?.latencyMs ?? p.latencyMs}ms</TableCell>
-                      <TableCell className="text-right sticky right-0 bg-card shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]">
+                      <TableCell className="text-right hidden md:table-cell">{p.successRate}%</TableCell>
+                      <TableCell className="text-right tabular-nums hidden md:table-cell">{healthById.get(p.id)?.latencyMs ?? p.latencyMs}ms</TableCell>
+                      <TableCell className="text-right">
                         {/* Four ghost icon buttons in a row with no color
                             distinction all read as one gray blur — each
                             action now gets its own color (matching what it
