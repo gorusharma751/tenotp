@@ -279,11 +279,8 @@ export default function BuyNumber() {
   return (
     <div>
       <PageHeader title="Buy a number" description="Pick country, service and quantity — everything in one screen." />
-      <div className="mb-4">
-        <Button asChild className="bg-red-600 hover:bg-red-700 text-white border-0 shadow-md shadow-red-600/30">
-          <a href="https://ssmpanal.lovable.app" target="_blank" rel="noopener noreferrer">🚀 Open SMM Panel</a>
-        </Button>
-      </div>
+      {/* SMM Panel button hidden — not ready yet ("abhi kaam nahi hai
+          usme"). See dashboard/index.tsx for the other spot it appeared. */}
       <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
         <div className="space-y-6">
           <Card className="shadow-soft"><CardContent className="p-5">

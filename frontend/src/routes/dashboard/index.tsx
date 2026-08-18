@@ -5,7 +5,7 @@ import { StatCard } from "@/components/common/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Wallet, Package, Inbox, Clock, ShoppingCart, KeyRound, CreditCard, Bell, ArrowRight, Sparkles, Headphones, Megaphone } from "lucide-react";
+import { Wallet, Package, Inbox, Clock, ShoppingCart, KeyRound, CreditCard, Bell, ArrowRight, Sparkles, Headphones } from "lucide-react";
 import { InstallAppButton } from "@/components/common/InstallAppButton";
 import { api } from "@/lib/apiClient";
 import { money, timeAgo } from "@/utils/format";
@@ -81,9 +81,12 @@ export default function Overview() {
         </CardContent>
       </Card>
 
-      {/* Quick trio: Help · SMM panel · Install app */}
+      {/* Quick pair: Help · Install app. SMM Panel card removed — not ready
+          yet ("abhi kaam nahi hai usme"), hidden rather than deleted so
+          it's easy to bring back later (see dashboard/buy-number.tsx for
+          the other spot it appeared). */}
       <Card className="shadow-soft border-primary/20 mb-6">
-        <CardContent className="p-4 grid gap-4 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-border">
+        <CardContent className="p-4 grid gap-4 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-border">
           <div className="flex flex-col gap-3 sm:pr-4 pt-0">
             <div className="flex items-center gap-3">
               <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary/10 text-primary shrink-0">
@@ -95,20 +98,6 @@ export default function Overview() {
               </div>
             </div>
             <Button asChild className="gradient-brand mt-auto"><Link to="/dashboard/support"><Headphones className="h-4 w-4 mr-1" />Get help</Link></Button>
-          </div>
-          <div className="flex flex-col gap-3 sm:px-4 pt-4 sm:pt-0">
-            <div className="flex items-center gap-3">
-              <div className="grid h-10 w-10 place-items-center rounded-xl bg-red-500/10 text-red-600 shrink-0">
-                <Megaphone className="h-5 w-5" />
-              </div>
-              <div className="min-w-0">
-                <p className="font-semibold leading-tight">SMM Panel</p>
-                <p className="text-xs text-muted-foreground">Grow social with our SMM services.</p>
-              </div>
-            </div>
-            <Button asChild className="bg-red-600 hover:bg-red-700 text-white mt-auto">
-              <a href="https://ssmpanal.lovable.app" target="_blank" rel="noopener noreferrer">Open SMM Panel</a>
-            </Button>
           </div>
           <div className="flex flex-col gap-3 sm:pl-4 pt-4 sm:pt-0">
             <div className="flex items-center gap-3">
