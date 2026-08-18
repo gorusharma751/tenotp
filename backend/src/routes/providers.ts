@@ -851,12 +851,23 @@ providersRouter.get("/:id/sync/history", async (req, res) => {
   }
 });
 
+// This used to depend on lib/providers/registry.ts's adapter registry, but
+// nothing anywhere ever calls registerAdapter() — so getAdapterByKind()
+// always returned undefined and this button always failed with "No
+// adapter registered", for every provider including the 5 real built-in
+// kinds. It also wrote into an unrelated `provider_services` catalog
+// collection the actual purchase flow (/otp/services, /otp/buy) never
+// reads from, so even a working adapter wouldn't have made countries or
+// services show up anywhere a buyer could see. Rewritten to call the same
+// real upstream sync the CRON_SECRET-only /api/public/sync-all route uses
+// (lib/providers/catalogSync.ts), writing into the actual `countries` and
+// `services` collections — this is now a genuine "why isn't my server's
+// catalog showing up" fix, triggerable by an admin instead of only an
+// external cron job.
 providersRouter.post("/:id/sync/services", async (req, res) => {
   try {
     const providerId = req.params.id;
     const provider = await loadSyncProvider(providerId);
-    const adapter = getAdapterByKind(provider.kind);
-    if (!adapter) throw new Error(`No adapter registered for provider kind "${provider.kind}". Use the built-in server sync (Grizzly / Tiger / SmsBower).`);
     const logsCol = await syncLogsCol();
     const now = new Date();
     const log: SyncLogDoc = {
@@ -865,34 +876,12 @@ providersRouter.post("/:id/sync/services", async (req, res) => {
     };
     await logsCol.insertOne(log);
     try {
-      const items: RawExternalService[] = await adapter.fetchServices({
-        providerId, baseUrl: provider.apiBaseUrl ?? undefined, timeoutMs: provider.timeoutMs ?? undefined,
-        retries: provider.retries ?? undefined, config: provider.config ?? {},
-      });
-      if (items.length) {
-        const svcCol = await servicesCatalogCol();
-        const seenAt = new Date();
-        await Promise.all(
-          items.map((s) =>
-            svcCol.updateOne(
-              { providerId, externalId: s.externalId },
-              {
-                $set: {
-                  externalName: s.externalName, externalCategory: s.externalCategory ?? null, baseCost: s.baseCost,
-                  currency: s.currency ?? "INR", region: s.region ?? null, meta: s.meta ?? {}, active: true,
-                  lastSeenAt: seenAt, updatedAt: seenAt,
-                },
-                $setOnInsert: { _id: crypto.randomUUID(), providerId, externalId: s.externalId, createdAt: seenAt },
-              },
-              { upsert: true },
-            ),
-          ),
-        );
-      }
+      const { syncProviderCatalog } = await import("../lib/providers/catalogSync.ts");
+      const r = await syncProviderCatalog({ _id: provider._id, name: provider.name, kind: provider.kind ?? "", config: provider.config ?? {} });
       const finishedAt = new Date();
       const result = await logsCol.findOneAndUpdate(
         { _id: log._id },
-        { $set: { status: "success", finishedAt, itemsIn: items.length, itemsOut: items.length, summary: { imported: items.length }, updatedAt: finishedAt } },
+        { $set: { status: "success", finishedAt, itemsIn: r.countries, itemsOut: r.services, summary: { countries_synced: r.countries, services_synced: r.services, markupPercent: r.markupPercent }, updatedAt: finishedAt } },
         { returnDocument: "after" },
       );
       const provCol = await providersCol();

@@ -41,6 +41,15 @@ function AdapterHint({ kind }: { kind: string }) {
       <div><span className="text-muted-foreground">Required secret:</span> <code className="font-mono">{info.secret}</code></div>
       <div><span className="text-muted-foreground">Suggested Base URL:</span> <code className="font-mono break-all">{info.baseUrl}</code></div>
       <div className="text-muted-foreground">{info.note}</div>
+      {info.secret !== "—" && (
+        <div className="mt-1 rounded bg-warning/10 text-foreground border border-warning/30 p-1.5 font-medium">
+          ⚠ The API key field below is for your own reference only — it is NOT what this server actually connects
+          with. The real key must be set as the <code className="font-mono">{info.secret}</code> environment
+          variable on your backend host (Render → this service → Environment tab), then the service needs a
+          restart to pick it up. Use "Health check" or "Test call" on this provider afterward to confirm it's
+          really connected.
+        </div>
+      )}
     </div>
   );
 }
