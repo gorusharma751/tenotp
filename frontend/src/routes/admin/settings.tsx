@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/common/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { RefreshCw } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -11,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/apiClient";
+import { money, dateTime } from "@/utils/format";
 
 /* ============================== Razorpay ============================== */
 // GET/POST /api/payments/razorpay/admin-status|admin-config — see
@@ -323,7 +326,22 @@ function BharatpePanel() {
     onError: (e: any) => toast.error(e?.message || "Test failed"),
   });
 
+  // Live feed straight from BharatPe's own transaction API (same call the
+  // auto-credit matcher uses) — lets an admin see the raw UTR/amount/status
+  // data BharatPe is actually reporting, instead of trusting the matcher's
+  // decision as a black box.
+  const txQ = useQuery({
+    queryKey: ["admin", "settings", "bharatpe", "transactions"],
+    queryFn: () =>
+      api.get<{ ok: boolean; transactions: { amount: number; utr: string; status: string; at: string }[]; error: string | null; status: string; scannedAt: string }>(
+        "/api/payments/bharatpe/admin-transactions",
+      ),
+    enabled: Boolean(q.data?.has_access_token),
+    refetchInterval: 30_000,
+  });
+
   return (
+    <>
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2">
         <CardTitle className="text-base">BharatPe</CardTitle>
@@ -393,6 +411,57 @@ function BharatpePanel() {
         </div>
       </CardContent>
     </Card>
+
+    <Card className="mt-4">
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <div>
+          <CardTitle className="text-base">Live BharatPe transactions</CardTitle>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Straight from BharatPe's own transaction API (the same feed the auto-credit matcher checks) — the raw data, not the matcher's decision.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => txQ.refetch()} disabled={txQ.isFetching || !q.data?.has_access_token}>
+          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${txQ.isFetching ? "animate-spin" : ""}`} />Refresh
+        </Button>
+      </CardHeader>
+      <CardContent className="p-0">
+        {!q.data?.has_access_token ? (
+          <p className="p-4 text-sm text-muted-foreground">Save an access token above to see live transactions here.</p>
+        ) : txQ.data && !txQ.data.ok ? (
+          <p className="p-4 text-sm text-destructive">{txQ.data.error || "Could not fetch transactions"}</p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>UTR</TableHead>
+                <TableHead>Amount</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Time</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(txQ.data?.transactions ?? []).length === 0 && (
+                <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground py-8">
+                  {txQ.isLoading ? "Loading…" : "No transactions in the scanned window"}
+                </TableCell></TableRow>
+              )}
+              {(txQ.data?.transactions ?? []).map((t) => (
+                <TableRow key={t.utr || `${t.amount}-${t.at}`}>
+                  <TableCell className="font-mono text-xs">{t.utr || "—"}</TableCell>
+                  <TableCell className="tabular-nums font-medium">{money(t.amount)}</TableCell>
+                  <TableCell><Badge variant={/SUCCESS|CREDIT|PAID|SETTLED/i.test(t.status) ? "default" : "secondary"}>{t.status || "—"}</Badge></TableCell>
+                  <TableCell className="text-xs">{t.at ? dateTime(t.at) : "—"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        {txQ.data?.scannedAt && (
+          <p className="px-4 py-2 text-[11px] text-muted-foreground border-t">Last scanned {dateTime(txQ.data.scannedAt)} · auto-refreshes every 30s</p>
+        )}
+      </CardContent>
+    </Card>
+    </>
   );
 }
 
