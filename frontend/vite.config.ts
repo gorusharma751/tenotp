@@ -39,7 +39,17 @@ const SRC_DIR = path.resolve(__dirname, "./src");
 const GENERATED_CSS = path.resolve(SRC_DIR, "tw-safelist.generated.css");
 const SCAN_EXTENSIONS = new Set([".tsx", ".jsx"]);
 const STRING_LITERAL_RE = /"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g;
-const CLASS_TOKEN_RE = /^[a-zA-Z0-9_](?:[a-zA-Z0-9_\-:/.[\]%!#(),]){0,80}$/;
+// Was missing `=` — arbitrary-variant selectors like
+// `data-[state=checked]:bg-primary` (used all over shadcn/Radix components:
+// Switch, Tabs, Accordion, Dialog open/close animations, Checkbox, etc.)
+// contain a literal `=` inside the brackets, so the old character class
+// rejected the whole token and silently dropped it from every candidate
+// list. Since styles.css sets `source(none)`, a dropped candidate never
+// gets compiled at all — not a wrong color, just *no rule generated*,
+// which is why toggles rendered as a plain, unstyled, barely-visible oval
+// (and any other data-state-driven style across the app was equally dark
+// silently missing this whole time, not just the Switch component).
+const CLASS_TOKEN_RE = /^[a-zA-Z0-9_](?:[a-zA-Z0-9_\-:/.[\]%!#(),=]){0,80}$/;
 
 function collectFiles(dir: string, out: string[]) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
