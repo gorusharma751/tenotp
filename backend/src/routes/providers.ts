@@ -5,9 +5,9 @@
 import { Router } from "express";
 import { getCollection } from "../lib/mongo.ts";
 import { requireAdmin, optionalAuth } from "../middleware/auth.ts";
-import { getSmsClientByKind } from "../lib/grizzly.ts";
 import { getAdapterByKind } from "../lib/providers/registry.ts";
 import type { RawExternalService, RawExternalCategory } from "../lib/providers/adapter.ts";
+import { pingOneProvider, SUPPORTED_HEALTH_KINDS } from "../lib/providers/health.ts";
 
 export const providersRouter = Router();
 
@@ -992,27 +992,10 @@ providersRouter.post("/:id/sync/health", async (req, res) => {
 
 // =====================================================================
 // src/lib/provider-health.functions.ts — ping all built-in SMS providers
+// (pingOneProvider/SUPPORTED_HEALTH_KINDS now live in
+// lib/providers/health.ts, shared with the background auto-sync scheduler)
 // =====================================================================
 type HealthProviderDoc = { _id: string; name: string; kind: string; createdAt: Date };
-const SUPPORTED_HEALTH_KINDS = new Set(["grizzlysms", "tigersms", "smsbower", "sastasms", "fivesim"]);
-
-async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return await Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
-}
-
-async function pingOneProvider(kind: string): Promise<{ ok: boolean; balance: number | null; message: string; latencyMs: number }> {
-  const { client, label } = getSmsClientByKind(kind);
-  const t0 = Date.now();
-  try {
-    const r = await withTimeout(client.getBalance(), 8000);
-    const latencyMs = Date.now() - t0;
-    const bal = (r as { balance: number | null }).balance;
-    if (bal === null || Number.isNaN(bal)) return { ok: false, balance: null, message: `${label}: invalid balance response`, latencyMs };
-    return { ok: true, balance: bal, message: "OK", latencyMs };
-  } catch (e) {
-    return { ok: false, balance: null, message: (e as Error).message, latencyMs: Date.now() - t0 };
-  }
-}
 
 providersRouter.post("/health/ping-all", async (_req, res) => {
   try {

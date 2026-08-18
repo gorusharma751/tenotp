@@ -342,7 +342,13 @@ function AdminProviders() {
                   <TableHead className="text-center">Live</TableHead>
                   <TableHead className="text-right">Success</TableHead>
                   <TableHead className="text-right">Latency</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  {/* 11 columns is wide enough to need horizontal scroll on
+                      phones — a plain scrolling table hides Actions off
+                      the right edge with no visual hint it's there at all,
+                      which read as "the buttons are just missing". Sticky
+                      + shadow keeps it pinned in view and visually
+                      separated regardless of scroll position. */}
+                  <TableHead className="text-right sticky right-0 bg-card shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]">Actions</TableHead>
                 </TableRow></TableHeader>
                 <TableBody>
                   {(list.data ?? []).map((p) => (
@@ -375,7 +381,7 @@ function AdminProviders() {
                       </TableCell>
                       <TableCell className="text-right">{p.successRate}%</TableCell>
                       <TableCell className="text-right tabular-nums">{healthById.get(p.id)?.latencyMs ?? p.latencyMs}ms</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-right sticky right-0 bg-card shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.15)]">
                         <div className="flex items-center justify-end gap-1">
                           <Button
                             size="sm"

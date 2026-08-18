@@ -10,6 +10,9 @@ import { publicRouter } from "./routes/public.ts";
 import { realtimeRouter } from "./routes/realtime.ts";
 import { referralsRouter } from "./routes/referrals.ts";
 import { catalogRouter } from "./routes/catalog.ts";
+import { getDb } from "./lib/mongo.ts";
+import { ensureIndexes } from "./lib/ensureIndexes.ts";
+import { startProviderAutoSync } from "./lib/providers/autoSync.ts";
 
 const app = express();
 
@@ -53,3 +56,18 @@ const port = Number(process.env.PORT) || 8787;
 app.listen(port, () => {
   console.log(`[backend] listening on http://localhost:${port}`);
 });
+
+// Best-effort, non-blocking: the server should keep serving requests even
+// if Mongo is briefly unreachable at boot — both of these retry naturally
+// on their own schedule (ensureIndexes on the next deploy, auto-sync on
+// its next interval tick) rather than needing to succeed at startup.
+getDb()
+  .then((db) => ensureIndexes(db))
+  .then(() => console.log("[backend] indexes ensured"))
+  .catch((err) => console.error("[backend] ensureIndexes failed (non-fatal):", err instanceof Error ? err.message : err));
+
+// Keeps provider connection status and the countries/services catalog
+// live automatically — see lib/providers/autoSync.ts for what this does
+// and why. No external cron, no Render Shell, no manual "Sync" clicks
+// needed for this to stay fresh.
+startProviderAutoSync();
