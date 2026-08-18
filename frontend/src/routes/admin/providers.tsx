@@ -385,34 +385,50 @@ function AdminProviders() {
                       <TableCell className="text-right hidden md:table-cell">{p.successRate}%</TableCell>
                       <TableCell className="text-right tabular-nums hidden md:table-cell">{healthById.get(p.id)?.latencyMs ?? p.latencyMs}ms</TableCell>
                       <TableCell className="text-right">
-                        {/* Four ghost icon buttons in a row with no color
-                            distinction all read as one gray blur — each
-                            action now gets its own color (matching what it
-                            does elsewhere in the app: info=sync/refresh,
-                            brand=edit, muted=navigate, destructive=delete)
-                            so they're distinguishable at a glance instead
-                            of requiring a hover-and-read-the-tooltip pass
-                            over every icon. */}
+                        {/* A plain "ghost" button has NO background and relies
+                            entirely on its text color resolving — on a
+                            phone that came through as icons not showing up
+                            at all ("white kar raha"). Switched to solid
+                            colored chips (real background + matching icon
+                            color, not just a hover-only tint) so each
+                            action is visibly colored and distinguishable
+                            even if a text-color utility ever fails to
+                            resolve: info=sync, brand=edit, neutral
+                            gray=configure, red=delete. */}
                         <div className="flex items-center justify-end gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-info hover:text-info hover:bg-info/10"
+                          <button
+                            type="button"
                             title="Sync services"
                             disabled={syncingId === p.id}
                             onClick={() => syncRow(p)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-info/15 text-info disabled:opacity-50"
                           >
                             <RefreshCw className={`h-4 w-4 ${syncingId === p.id ? "animate-spin" : ""}`} />
-                          </Button>
-                          <Button size="sm" variant="ghost" className="text-primary hover:text-primary hover:bg-primary/10" title="Edit" onClick={() => setEditing({ ...p })}>
+                          </button>
+                          <button
+                            type="button"
+                            title="Edit"
+                            onClick={() => setEditing({ ...p })}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-primary/15 text-primary"
+                          >
                             <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button asChild size="sm" variant="ghost" className="text-muted-foreground hover:text-foreground" title="Configure">
-                            <Link to={"/gourav-ankit-adi/providers/$id" as any} params={{ id: p.id } as any}><Settings className="h-4 w-4" /></Link>
-                          </Button>
-                          <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive hover:bg-destructive/10" title="Delete" onClick={() => remove(p.id, p.name)}>
+                          </button>
+                          <Link
+                            to={"/gourav-ankit-adi/providers/$id" as any}
+                            params={{ id: p.id } as any}
+                            title="Configure"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-muted text-foreground"
+                          >
+                            <Settings className="h-4 w-4" />
+                          </Link>
+                          <button
+                            type="button"
+                            title="Delete"
+                            onClick={() => remove(p.id, p.name)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-destructive/15 text-destructive"
+                          >
                             <Trash2 className="h-4 w-4" />
-                          </Button>
+                          </button>
                         </div>
                       </TableCell>
                     </TableRow>
