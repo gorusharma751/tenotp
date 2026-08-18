@@ -1,4 +1,4 @@
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/common/PageHeader";
 import { StatCard } from "@/components/common/StatCard";
@@ -11,6 +11,7 @@ import { api } from "@/lib/apiClient";
 import { money, timeAgo } from "@/utils/format";
 import { useUserStore } from "@/store/userStore";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "sonner";
 
 interface Order {
   id: string;
@@ -34,6 +35,7 @@ export default function Overview() {
     { id: "n2", title: `Deposit ${money(25 * 85)} completed`, time: "2h ago" },
     { id: "n3", title: "Ticket #tkt_301 replied", time: "1d ago" },
   ];
+  const navigate = useNavigate();
   const user = useUserStore((s) => s.user);
   const wallet = useQuery({ queryKey: ["wallet", "balance"], queryFn: () => api.get<{ balance: number }>("/api/wallet/balance") });
   const orders = useQuery({ queryKey: ["orders", "recent"], queryFn: () => api.get<Order[]>("/api/otp/my-orders") });
@@ -54,7 +56,16 @@ export default function Overview() {
             <p className="mt-1 text-sm text-muted-foreground">Wallet balance: <span className="font-semibold text-foreground">{money(walletBalance)}</span></p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button asChild className="gradient-brand"><Link to="/dashboard/buy-number"><ShoppingCart className="h-4 w-4 mr-1" />Buy number</Link></Button>
+            {/* Plain declarative Link kept getting reported as "button does
+                nothing" on this specific route, repeatedly, even after
+                confirming the route/component/API all work — switched to
+                an explicit onClick + navigate() so a click can never be
+                silently swallowed by any asChild/Slot prop-merging quirk,
+                and any real navigation error surfaces as a toast instead
+                of nothing happening. */}
+            <Button className="gradient-brand" onClick={() => navigate({ to: "/dashboard/buy-number" }).catch((e) => toast.error(e instanceof Error ? e.message : "Could not open Buy Number"))}>
+              <ShoppingCart className="h-4 w-4 mr-1" />Buy number
+            </Button>
             <Button asChild variant="outline"><Link to="/dashboard/deposit"><CreditCard className="h-4 w-4 mr-1" />Deposit</Link></Button>
           </div>
         </CardContent>
