@@ -63,26 +63,16 @@ export default function Overview() {
             <p className="mt-1 text-sm text-muted-foreground">Wallet balance: <span className="font-semibold text-foreground">{money(walletBalance)}</span></p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {/* Plain declarative Link kept getting reported as "button does
-                nothing" on this specific route, repeatedly, even after
-                confirming the route/component/API all work — switched to
-                an explicit onClick + navigate() so a click can never be
-                silently swallowed by any asChild/Slot prop-merging quirk,
-                and any real navigation error surfaces as a toast instead
-                of nothing happening. */}
+            {/* Explicit navigate() instead of a plain Link, kept from the
+                debugging round: a decorative absolutely-positioned glow
+                div in this card was intercepting taps on mobile before it
+                got pointer-events-none — confirmed fixed. The diagnostic
+                "Opening..." toast that helped isolate that is removed now
+                that it's done its job; the error-toast fallback stays as
+                a genuine safety net. */}
             <Button
               className="gradient-brand"
-              onClick={() => {
-                // Fires the instant the tap is actually received by this
-                // button — separates "the click never reached the handler"
-                // from "the handler ran but navigation didn't change the
-                // page", since reports of this exact button not working
-                // gave no visible signal either way to tell which.
-                toast.info("Opening Buy Number…");
-                navigate({ to: "/dashboard/buy-number" }).catch((e) =>
-                  toast.error(e instanceof Error ? e.message : "Could not open Buy Number"),
-                );
-              }}
+              onClick={() => navigate({ to: "/dashboard/buy-number" }).catch((e) => toast.error(e instanceof Error ? e.message : "Could not open Buy Number"))}
             >
               <ShoppingCart className="h-4 w-4 mr-1" />Buy number
             </Button>
