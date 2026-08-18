@@ -63,7 +63,20 @@ export default function Overview() {
                 silently swallowed by any asChild/Slot prop-merging quirk,
                 and any real navigation error surfaces as a toast instead
                 of nothing happening. */}
-            <Button className="gradient-brand" onClick={() => navigate({ to: "/dashboard/buy-number" }).catch((e) => toast.error(e instanceof Error ? e.message : "Could not open Buy Number"))}>
+            <Button
+              className="gradient-brand"
+              onClick={() => {
+                // Fires the instant the tap is actually received by this
+                // button — separates "the click never reached the handler"
+                // from "the handler ran but navigation didn't change the
+                // page", since reports of this exact button not working
+                // gave no visible signal either way to tell which.
+                toast.info("Opening Buy Number…");
+                navigate({ to: "/dashboard/buy-number" }).catch((e) =>
+                  toast.error(e instanceof Error ? e.message : "Could not open Buy Number"),
+                );
+              }}
+            >
               <ShoppingCart className="h-4 w-4 mr-1" />Buy number
             </Button>
             <Button asChild variant="outline"><Link to="/dashboard/deposit"><CreditCard className="h-4 w-4 mr-1" />Deposit</Link></Button>
