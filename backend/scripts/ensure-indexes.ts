@@ -28,9 +28,18 @@ async function main() {
   await db.collection("users").createIndex({ referralCode: 1 }, { unique: true, sparse: true });
   await db.collection("users").createIndex({ referredBy: 1 });
 
-  // countries / services (catalog)
-  await db.collection("countries").createIndex({ code: 1 }, { unique: true });
-  await db.collection("services").createIndex({ id: 1 }, { unique: true });
+  // countries / services (catalog) — these collections key on their own
+  // `_id` (e.g. "gr_7", "fs_wa"), set directly by lib/providers/catalogSync.ts
+  // and routes/public.ts's sync jobs. There is no separate `code`/`id`
+  // field on either doc — a stale unique index on those non-existent
+  // fields used to sit here from an earlier schema; since every document
+  // was missing the field, they all collided as duplicate `null`s the
+  // moment a sync tried to upsert more than one country/service, throwing
+  // "E11000 duplicate key error ... dup key: { code: null }" and silently
+  // blocking the entire catalog sync feature. Dropped rather than kept —
+  // _id is already unique and is the only key this data actually has.
+  try { await db.collection("countries").dropIndex("code_1"); } catch { /* already gone */ }
+  try { await db.collection("services").dropIndex("id_1"); } catch { /* already gone */ }
 
   // providers + sub-catalogs
   await db.collection("providers").createIndex({ kind: 1 });
