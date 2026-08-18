@@ -100,6 +100,17 @@ export default function BuyNumber() {
     return [...filtered].sort((a, b) => speed(a) - speed(b) || a.price - b.price);
   }, [liveServices.data, otpMode]);
 
+  // Whichever server has a real, measured fastest delivery time (recorded
+  // automatically from actual past OTP deliveries — see backend
+  // lib/providers/stats.ts) gets highlighted, so the fastest option
+  // literally rises to the top and stands out without the buyer having to
+  // compare timestamps themselves.
+  const fastestKey = useMemo(() => {
+    const withSpeed = serverOffers.filter((s) => typeof s.avgSpeedSec === "number" && s.avgSpeedSec > 0);
+    if (withSpeed.length < 2) return null; // nothing to compare against
+    return `${withSpeed[0].providerId}:${withSpeed[0].id}`;
+  }, [serverOffers]);
+
   const unitPrice = useMemo(() => (service ? Number(service.price.toFixed(2)) : 0), [service]);
   const total = Number((unitPrice * quantity).toFixed(2));
 
@@ -336,27 +347,32 @@ export default function BuyNumber() {
                       : `No service matches "${qService}".`}
                 </p>
               )}
-              {serverOffers.slice(0, 500).map((s) => (
-                <button key={`${s.providerId}:${s.id}`} type="button" onClick={() => setService(s)}
-                  className={cn("flex w-full items-center gap-3 border-b p-3 text-left last:border-b-0 hover:bg-accent/50 transition", service?.id === s.id && "bg-primary/5")}>
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
-                    <ServiceIcon name={s.name} className="h-6 w-6" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium truncate flex items-center gap-1.5" title={s.name}>
-                      {baseName(s.name)}
-                      {s.supportsMulti && <Badge variant="outline" className="h-4 px-1 text-[9px] font-normal border-primary/40 text-primary">MULTI</Badge>}
+              {serverOffers.slice(0, 500).map((s) => {
+                const key = `${s.providerId}:${s.id}`;
+                const isFastest = key === fastestKey;
+                return (
+                  <button key={key} type="button" onClick={() => setService(s)}
+                    className={cn("flex w-full items-center gap-3 border-b p-3 text-left last:border-b-0 hover:bg-accent/50 transition", service?.id === s.id && "bg-primary/5", isFastest && "bg-success/5")}>
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
+                      <ServiceIcon name={s.name} className="h-6 w-6" />
                     </span>
-                    <span className="block text-[11px] text-muted-foreground truncate flex items-center gap-1">
-                      <Server className="h-2.5 w-2.5" />{s.serverLabel} · {s.stock.toLocaleString("en-IN")} in stock
-                      {typeof s.avgSpeedSec === "number" && s.avgSpeedSec > 0 && (
-                        <span className="ml-1 inline-flex items-center gap-0.5 text-success">· ⚡ {Math.round(s.avgSpeedSec)}s avg</span>
-                      )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium truncate flex items-center gap-1.5" title={s.name}>
+                        {baseName(s.name)}
+                        {s.supportsMulti && <Badge variant="outline" className="h-4 px-1 text-[9px] font-normal border-primary/40 text-primary">MULTI</Badge>}
+                        {isFastest && <Badge className="h-4 px-1 text-[9px] font-normal bg-success/15 text-success border-success/30" variant="outline">FASTEST</Badge>}
+                      </span>
+                      <span className="block text-[11px] text-muted-foreground truncate flex items-center gap-1">
+                        <Server className="h-2.5 w-2.5" />{s.serverLabel} · {s.stock.toLocaleString("en-IN")} in stock
+                        {typeof s.avgSpeedSec === "number" && s.avgSpeedSec > 0 && (
+                          <span className={cn("ml-1 inline-flex items-center gap-0.5", isFastest ? "text-success font-medium" : "text-success")}>· ⚡ {Math.round(s.avgSpeedSec)}s avg</span>
+                        )}
+                      </span>
                     </span>
-                  </span>
-                  <span className="shrink-0 text-sm font-semibold tabular-nums">{money(s.price)}</span>
-                </button>
-              ))}
+                    <span className="shrink-0 text-sm font-semibold tabular-nums">{money(s.price)}</span>
+                  </button>
+                );
+              })}
             </div>
           </CardContent></Card>
 

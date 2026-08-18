@@ -116,7 +116,14 @@ otpRouter.post("/services", requireAuth, async (req, res) => {
             id: `${prefix}${idSuffix}`, externalId: v.code, name: friendly, icon: guess.icon, category: guess.category,
             price: Number((v.cost * INR_PER_USDT * (1 + markupPercent / 100)).toFixed(2)), stock: Math.min(v.stock, 2_000_000_000),
             providerId: provider._id, providerName: provider.name, serverLabel: `Server ${serverNumByProvider.get(provider._id) ?? "?"}`,
-            countryCode: `${prefix}${countryId}`, avgSpeedSec: null, supportsMulti,
+            countryCode: `${prefix}${countryId}`,
+            // Real rolling average recorded by otp.ts's /status route each
+            // time an OTP actually arrives for this provider (see
+            // lib/providers/stats.ts). null until at least one real
+            // delivery has been observed — the frontend already treats
+            // null as "unknown" and falls back to price-only sort.
+            avgSpeedSec: (Number(provider.config?.avgSpeedSec) || 0) > 0 ? Number(provider.config!.avgSpeedSec) : null,
+            supportsMulti,
           });
         }
       } catch { /* skip provider on error */ }
@@ -281,7 +288,7 @@ otpRouter.post("/status", requireAuth, async (req, res) => {
   try {
     const orderId = String(req.body?.orderId ?? "");
     if (!orderId) throw new Error("Order id required");
-    const orders = await getCollection<{ _id: string; userId: string; operator?: string | null; otp?: string | null; status: string }>("orders");
+    const orders = await getCollection<{ _id: string; userId: string; operator?: string | null; otp?: string | null; status: string; providerId?: string | null; createdAt: Date }>("orders");
     const order = await orders.findOne({ _id: orderId });
     if (!order) throw new Error("Order not found");
     if (order.userId !== req.auth.userId && !req.auth.roles.includes("admin")) throw new Error("Forbidden");
@@ -315,6 +322,12 @@ otpRouter.post("/status", requireAuth, async (req, res) => {
         const orderEvents = await getCollection("order_events");
         await orderEvents.insertOne({ _id: crypto.randomUUID(), orderId, action: "otp_received", activationId, note: `OTP: ${status.code}`, createdAt: new Date() } as never);
       } catch { /* best-effort */ }
+      if (order.providerId) {
+        try {
+          const { recordProviderSpeed } = await import("../lib/providers/stats.ts");
+          await recordProviderSpeed(order.providerId, (Date.now() - order.createdAt.getTime()) / 1000);
+        } catch { /* best-effort — never block handing the OTP back over a stats write */ }
+      }
       return res.json({ status: "received", otp: status.code });
     }
     res.json({ status: status.status, otp: null });

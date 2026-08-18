@@ -138,7 +138,13 @@ function sortServers<T extends ProviderConfig>(items: T[]) {
 async function fetchAll(): Promise<ProviderConfig[]> {
   const col = await providersCol();
   const rows = await col.find({}).sort({ createdAt: -1 }).toArray();
-  return sortServers(rows.map(mapRow));
+  const mapped = sortServers(rows.map(mapRow));
+  // mapRow's successRate falls back to a `config.successRate` field
+  // nothing ever writes to (see stats.ts comment) — overlay the real,
+  // freshly-computed value from actual order outcomes.
+  const { computeProviderSuccessRates } = await import("../lib/providers/stats.ts");
+  const rates = await computeProviderSuccessRates();
+  return mapped.map((p) => ({ ...p, successRate: rates.get(p.id)?.successRate ?? 0 }));
 }
 
 function applyListFilters(items: ProviderConfig[], query: { q?: string; category?: string; status?: string; env?: string }) {
@@ -458,7 +464,10 @@ providersRouter.get("/:id", async (req, res) => {
   try {
     const c = await providersCol();
     const row = await c.findOne({ _id: req.params.id });
-    res.json(row ? mapRow(row) : null);
+    if (!row) return res.json(null);
+    const { computeProviderSuccessRates } = await import("../lib/providers/stats.ts");
+    const rates = await computeProviderSuccessRates();
+    res.json({ ...mapRow(row), successRate: rates.get(row._id)?.successRate ?? 0 });
   } catch (err) {
     fail(res, err);
   }
@@ -536,6 +545,21 @@ providersRouter.post("/", async (req, res) => {
     ).toLowerCase();
     const c = await providersCol();
     const now = new Date();
+    // Used to hardcode status:"connected" the instant a provider was
+    // created, with zero verification — a typo'd kind or a dead upstream
+    // account still showed up "connected" until the next 30s ping cycle
+    // happened to correct it. For the 5 known SMS kinds we can actually
+    // verify reachability right now (same real getBalance() call the
+    // health-check/ping-all routes use); for a "custom" kind there's no
+    // adapter that can check anything (see registry.ts), so it's marked
+    // honestly "unverified" instead of falsely "connected".
+    let status: string = "unverified";
+    let latencyMs: number | null = null;
+    if (SUPPORTED_HEALTH_KINDS.has(kind)) {
+      const r = await pingOneProvider(kind);
+      status = r.ok ? "connected" : "error";
+      latencyMs = r.latencyMs;
+    }
     const doc: ProviderDoc = {
       _id: crypto.randomUUID(),
       name: input.name.trim(),
@@ -544,7 +568,8 @@ providersRouter.post("/", async (req, res) => {
       kind,
       apiBaseUrl: input.baseUrl.trim(),
       apiKeyMasked: input.apiKey ? `${input.apiKey.slice(0, 4)}••••${input.apiKey.slice(-2)}` : null,
-      status: "connected",
+      status,
+      latencyMs,
       enabledInProduction: (input.environment ?? "production") === "production",
       enabledInSandbox: true,
       config: { markupPercent: Number.isFinite(input.markupPercent) ? Math.max(0, Number(input.markupPercent)) : 15 },
@@ -558,19 +583,49 @@ providersRouter.post("/", async (req, res) => {
   }
 });
 
+// Both routes below used to be fully fake — health-check wrote a random
+// 100-300ms number with zero network I/O, and test-call always returned a
+// canned success with no request sent anywhere. That meant clicking
+// "connect"/"test" on a bad API key or dead endpoint always reported
+// success, so admins had no real way to tell a provider was actually
+// reachable. Now both make the same real upstream call ping-all uses
+// (an actual getBalance() request to the provider's API) for the 5 known
+// SMS provider kinds, and honestly report "no live check available" for
+// "custom" kind providers instead of faking a result.
 providersRouter.post("/:id/health-check", async (req, res) => {
   try {
-    const latencyMs = 100 + Math.floor(Math.random() * 200);
     const c = await providersCol();
-    await c.updateOne({ _id: req.params.id }, { $set: { latencyMs, updatedAt: new Date() } });
-    res.json({ ok: true, latencyMs, message: "OK" });
+    const provider = await c.findOne({ _id: req.params.id });
+    if (!provider) throw new Error("Provider not found");
+    const kind = (provider.kind ?? "").toLowerCase();
+    if (!SUPPORTED_HEALTH_KINDS.has(kind)) {
+      return res.json({ ok: false, latencyMs: 0, message: `No live health check available for "${kind || "custom"}" providers yet.` });
+    }
+    const r = await pingOneProvider(kind);
+    const status = r.ok ? "connected" : "error";
+    await c.updateOne({ _id: req.params.id }, { $set: { status, latencyMs: r.latencyMs, updatedAt: new Date() } });
+    res.json({ ok: r.ok, latencyMs: r.latencyMs, message: r.ok ? `Reachable — balance ${r.balance}` : r.message });
   } catch (err) {
     fail(res, err);
   }
 });
 
-providersRouter.post("/:id/test", async (_req, res) => {
-  res.json({ ok: true, id: `snd_${Date.now()}`, message: "Test call queued" });
+providersRouter.post("/:id/test", async (req, res) => {
+  try {
+    const c = await providersCol();
+    const provider = await c.findOne({ _id: req.params.id });
+    if (!provider) throw new Error("Provider not found");
+    const kind = (provider.kind ?? "").toLowerCase();
+    if (!SUPPORTED_HEALTH_KINDS.has(kind)) {
+      return res.json({ ok: false, id: null, message: `No live connectivity test available for "${kind || "custom"}" providers yet — add real credentials and a supported kind first.` });
+    }
+    const r = await pingOneProvider(kind);
+    const status = r.ok ? "connected" : "error";
+    await c.updateOne({ _id: req.params.id }, { $set: { status, latencyMs: r.latencyMs, updatedAt: new Date() } });
+    res.json({ ok: r.ok, id: r.ok ? `chk_${Date.now()}` : null, message: r.ok ? `Connected — balance ${r.balance}, ${r.latencyMs}ms` : r.message });
+  } catch (err) {
+    fail(res, err);
+  }
 });
 
 // providersApi.logs() stub — always returns [] in the original monolith.
