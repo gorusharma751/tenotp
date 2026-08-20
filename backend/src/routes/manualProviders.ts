@@ -5,7 +5,7 @@
 // collections are new. See lib/db/manualProviders.ts for the money logic.
 import { Router } from "express";
 import { getCollection } from "../lib/mongo.ts";
-import { requireAuth, requireAdmin, requireProvider } from "../middleware/auth.ts";
+import { requireAuth, requireAdmin, requireProvider, requireSoftLaunchAdmin } from "../middleware/auth.ts";
 import type { UserDoc } from "../lib/types.ts";
 import {
   type ManualProviderDoc, type ManualProviderServiceDoc, type ManualProviderRequestDoc,
@@ -22,6 +22,12 @@ import {
 } from "../lib/db/manualProviders.ts";
 
 export const manualProvidersRouter = Router();
+
+// Soft-launched: live in production, admin-only for now — see
+// requireSoftLaunchAdmin's doc comment. Every route below this line
+// requires an admin session, on top of whatever it individually checks
+// (requireAuth/requireProvider/requireAdmin).
+manualProvidersRouter.use(requireSoftLaunchAdmin);
 
 function fail(res: import("express").Response, err: unknown, code = 400) {
   res.status(code).json({ error: err instanceof Error ? err.message : "Request failed" });

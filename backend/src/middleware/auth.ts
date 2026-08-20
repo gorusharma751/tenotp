@@ -55,3 +55,15 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
   req.auth = { userId: claims?.sub ?? "", email: claims?.email ?? "", roles: claims?.roles ?? [] };
   next();
 }
+
+/** Manual Provider is soft-launched — live in production but only usable
+ * by admin accounts for now (mirrors the frontend nav/route gating, so a
+ * non-admin can't reach it by calling the API directly either). Mounted
+ * ahead of every route in that router; the route's own requireAuth/
+ * requireProvider/requireAdmin still runs after this for its normal checks. */
+export function requireSoftLaunchAdmin(req: Request, res: Response, next: NextFunction) {
+  const claims = claimsFrom(req);
+  if (!claims) return res.status(401).json({ error: "Unauthorized: No valid session" });
+  if (!claims.roles.includes("admin")) return res.status(403).json({ error: "This feature isn't available on your account yet" });
+  next();
+}
