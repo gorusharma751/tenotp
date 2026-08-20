@@ -79,6 +79,10 @@ export function DashboardShell({ nav, role, profileRoot }: Props) {
   const { user, admin, logoutUser, logoutAdmin } = useUserStore();
   const current = role === "admin" ? admin : user;
   const navigate = useNavigate();
+  // Soft-launched features (adminOnly nav items) stay hidden from regular
+  // users for now — "abhi ke liye bas admin ko hi show hoga" — even
+  // though the code is live, until the feature's ready for everyone.
+  const visibleNav = useMemo(() => nav.filter((n) => !n.adminOnly || current?.role === "admin"), [nav, current?.role]);
   const isAdminUser = !!admin;
   const wallet = useQuery({
     queryKey: ["wallet", "balance"],
@@ -87,6 +91,13 @@ export function DashboardShell({ nav, role, profileRoot }: Props) {
     refetchOnWindowFocus: true,
   });
   const walletBalance = Number(wallet.data?.balance ?? user?.wallet ?? 0);
+  // The @handle shown on Manual Provider profiles — never the real
+  // email/phone. Only relevant for a logged-in "user"-role account.
+  const myUsername = useQuery({
+    queryKey: ["user", "my-username"],
+    queryFn: () => api.get<{ username: string }>("/api/manual-providers/my-username"),
+    enabled: role === "user" && !!user,
+  });
   const contact = useContactLinks();
   const telegramUrl = contact.data?.telegramGroup || contact.data?.telegramSupport || "";
 
@@ -105,7 +116,7 @@ export function DashboardShell({ nav, role, profileRoot }: Props) {
           <SidebarHeader className="px-3 py-4">
             <Logo to={role === "admin" ? "/gourav-ankit-adi/dashboard" : "/dashboard"} />
           </SidebarHeader>
-          <SidebarContent><NavGroups nav={nav} /></SidebarContent>
+          <SidebarContent><NavGroups nav={visibleNav} /></SidebarContent>
           <SidebarFooter className="px-3 py-3 text-xs text-muted-foreground">
             {role === "admin" ? "Admin Console" : "v1.0"}
           </SidebarFooter>
@@ -193,6 +204,7 @@ export function DashboardShell({ nav, role, profileRoot }: Props) {
                   <DropdownMenuLabel>
                     <p className="text-sm font-medium">{current?.name ?? "Guest"}</p>
                     <p className="text-xs text-muted-foreground truncate">{current?.email ?? "—"}</p>
+                    {role === "user" && myUsername.data && <p className="text-xs text-muted-foreground truncate">@{myUsername.data.username}</p>}
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem asChild><Link to={profileRoot as any}><UserIcon className="mr-2 h-4 w-4" />Profile</Link></DropdownMenuItem>

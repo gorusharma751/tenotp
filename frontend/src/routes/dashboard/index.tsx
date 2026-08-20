@@ -5,7 +5,7 @@ import { StatCard } from "@/components/common/StatCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Wallet, Package, Inbox, Clock, ShoppingCart, KeyRound, CreditCard, Bell, ArrowRight, Sparkles, Headphones } from "lucide-react";
+import { Wallet, Package, Inbox, Clock, ShoppingCart, KeyRound, CreditCard, Bell, ArrowRight, Sparkles, Headphones, Store } from "lucide-react";
 import { InstallAppButton } from "@/components/common/InstallAppButton";
 import { api } from "@/lib/apiClient";
 import { money, timeAgo } from "@/utils/format";
@@ -75,6 +75,14 @@ export default function Overview() {
               onClick={() => navigate({ to: "/dashboard/buy-number" }).catch((e) => toast.error(e instanceof Error ? e.message : "Could not open Buy Number"))}
             >
               <ShoppingCart className="h-4 w-4 mr-1" />Buy number
+            </Button>
+            {/* Manual Provider — same button style/spacing as Buy number,
+                right beside it, per the Manual Provider module spec. */}
+            <Button
+              variant="outline"
+              onClick={() => navigate({ to: "/dashboard/manual-provider" as any }).catch((e) => toast.error(e instanceof Error ? e.message : "Could not open Manual Provider"))}
+            >
+              <Store className="h-4 w-4 mr-1" />Manual Provider
             </Button>
             <Button asChild variant="outline"><Link to="/dashboard/deposit"><CreditCard className="h-4 w-4 mr-1" />Deposit</Link></Button>
           </div>

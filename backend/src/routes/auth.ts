@@ -36,6 +36,20 @@ async function generateReferralCode(users: Awaited<ReturnType<typeof usersCollec
   throw new Error("Could not generate a referral code, please try again");
 }
 
+/** Every user gets a unique @handle at signup — shown on Manual Provider
+ * profiles instead of their real name/email/phone. Seeded from the email
+ * so it's recognizable to the user themselves, with a random numeric
+ * suffix appended only on a collision. */
+async function generateUsername(users: Awaited<ReturnType<typeof usersCollection>>, seed: string): Promise<string> {
+  const base = seed.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16) || "user";
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const candidate = attempt === 0 ? base : `${base}${Math.floor(1000 + Math.random() * 9000)}`;
+    const exists = await users.findOne({ username: candidate }, { projection: { _id: 1 } });
+    if (!exists) return candidate;
+  }
+  return `${base}${crypto.randomUUID().replace(/-/g, "").slice(0, 6)}`;
+}
+
 authRouter.post("/signup", async (req, res) => {
   try {
     const email = emailSchema.parse(req.body?.email);
@@ -58,6 +72,7 @@ authRouter.post("/signup", async (req, res) => {
     const now = new Date();
     const doc: UserDoc = {
       _id: crypto.randomUUID(), email, emailLower, passwordHash, name,
+      username: await generateUsername(users, emailLower.split("@")[0]),
       referralCode: await generateReferralCode(users), referredBy, walletBalance: 0,
       status: "active", roles: ["user"], createdAt: now, updatedAt: now,
     };

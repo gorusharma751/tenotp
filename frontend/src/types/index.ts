@@ -6,6 +6,10 @@ export interface User {
   email: string;
   avatarUrl?: string;
   role: Role;
+  /** Raw roles array from the backend (e.g. includes "provider" for a
+   * Manual Provider seller) — `role` above stays admin/user-only; the
+   * Seller Panel guard and nav check this instead. */
+  roles?: string[];
   createdAt: string;
   wallet: number;
   verified: boolean;

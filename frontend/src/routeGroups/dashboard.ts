@@ -12,6 +12,7 @@ import { ensureSessionSynced } from "@/lib/auth";
 
 import DashboardIndex from "@/routes/dashboard/index";
 import BuyNumber from "@/routes/dashboard/buy-number";
+import ManualProvider from "@/routes/dashboard/manual-provider";
 import Orders from "@/routes/dashboard/orders";
 import OrderDetail from "@/routes/dashboard/order.$id";
 import OrderManagement from "@/routes/dashboard/order-management";
@@ -66,6 +67,16 @@ export const dashboardLayoutRoute = createRoute({
 
 const dashboardIndexRoute = createRoute({ getParentRoute: () => dashboardLayoutRoute, path: "/dashboard", component: DashboardIndex });
 const buyNumberRoute = createRoute({ getParentRoute: () => dashboardLayoutRoute, path: "/dashboard/buy-number", component: BuyNumber });
+const manualProviderRoute = createRoute({
+  getParentRoute: () => dashboardLayoutRoute, path: "/dashboard/manual-provider", component: ManualProvider,
+  // Soft-launched — live in production, but hidden from regular users
+  // for now ("abhi ke liye bas admin ko hi show hoga"). The nav item is
+  // already hidden; this stops a direct URL hit too.
+  beforeLoad: () => {
+    const u = useUserStore.getState().user;
+    if (u?.role !== "admin") throw redirect({ to: "/dashboard" });
+  },
+});
 const ordersRoute = createRoute({ getParentRoute: () => dashboardLayoutRoute, path: "/dashboard/orders", component: Orders });
 const orderDetailRoute = createRoute({ getParentRoute: () => dashboardLayoutRoute, path: "/dashboard/order/$id", component: OrderDetail });
 const orderManagementRoute = createRoute({ getParentRoute: () => dashboardLayoutRoute, path: "/dashboard/order-management", component: OrderManagement });
@@ -103,6 +114,7 @@ const customerDetailRoute = createRoute({ getParentRoute: () => dashboardLayoutR
 export const dashboardChildRoutes = [
   dashboardIndexRoute,
   buyNumberRoute,
+  manualProviderRoute,
   ordersRoute,
   orderDetailRoute,
   orderManagementRoute,

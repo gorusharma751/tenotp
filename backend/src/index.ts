@@ -10,9 +10,11 @@ import { publicRouter } from "./routes/public.ts";
 import { realtimeRouter } from "./routes/realtime.ts";
 import { referralsRouter } from "./routes/referrals.ts";
 import { catalogRouter } from "./routes/catalog.ts";
+import { manualProvidersRouter } from "./routes/manualProviders.ts";
 import { getDb } from "./lib/mongo.ts";
 import { ensureIndexes } from "./lib/ensureIndexes.ts";
 import { startProviderAutoSync } from "./lib/providers/autoSync.ts";
+import { autoExpireStaleRequests } from "./lib/db/manualProviders.ts";
 
 const app = express();
 
@@ -46,6 +48,7 @@ app.use("/api/public", publicRouter);
 app.use("/api/realtime", realtimeRouter);
 app.use("/api/referrals", referralsRouter);
 app.use("/api/catalog", catalogRouter);
+app.use("/api/manual-providers", manualProvidersRouter);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);
@@ -71,3 +74,12 @@ getDb()
 // and why. No external cron, no Render Shell, no manual "Sync" clicks
 // needed for this to stay fresh.
 startProviderAutoSync();
+
+// Auto-refunds a Manual Provider request if the seller never starts it
+// within settings.assignExpiryMinutes — otherwise a buyer's money could
+// sit stuck forever against an unresponsive/offline seller with no way
+// out. Checked every minute; each run only touches requests actually past
+// their deadline.
+setInterval(() => {
+  autoExpireStaleRequests().catch((err) => console.error("[autoExpireStaleRequests] sweep failed:", err instanceof Error ? err.message : err));
+}, 60_000);

@@ -25,6 +25,7 @@ function applyToStore(u: User | null) {
     ...s,
     user: !u ? null : u.role === "user" || u.role === "admin" ? u : s.user,
     admin: u?.role === "admin" ? u : s.admin,
+    seller: !u ? null : u.roles?.includes("provider") ? u : s.seller,
   }));
 }
 
@@ -60,7 +61,7 @@ export async function signIn(emailInput: string, passwordInput: string) {
 
 export async function signOut() {
   setToken(null);
-  useUserStore.setState({ user: null, admin: null });
+  useUserStore.setState({ user: null, admin: null, seller: null });
 }
 
 export async function sendPasswordReset(emailInput: string) {

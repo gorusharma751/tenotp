@@ -61,6 +61,13 @@ import AdminPromotions from "@/routes/admin/promotions";
 import AdminResellers from "@/routes/admin/resellers";
 import AdminServices from "@/routes/admin/services";
 import AdminSettings from "@/routes/admin/settings";
+import AdminManualProviderDashboard from "@/routes/admin/manual-provider";
+import AdminManualProviders from "@/routes/admin/manual-provider.providers";
+import AdminManualProviderDetail from "@/routes/admin/manual-provider.providers.$id";
+import AdminManualProviderRequests from "@/routes/admin/manual-provider.requests";
+import AdminManualProviderDisputes from "@/routes/admin/manual-provider.disputes";
+import AdminManualProviderSettlements from "@/routes/admin/manual-provider.settlements";
+import AdminManualProviderSettings from "@/routes/admin/manual-provider.settings";
 
 // Ports the monolith's `src/routes/gourav-ankit-adi.tsx` admin shell.
 // The monolith's bare `/gourav-ankit-adi` (login) route is NOT ported here —
@@ -141,4 +148,11 @@ export const adminChildRoutes = [
   p("/gourav-ankit-adi/resellers", AdminResellers),
   p("/gourav-ankit-adi/services", AdminServices),
   p("/gourav-ankit-adi/settings", AdminSettings),
+  p("/gourav-ankit-adi/manual-provider", AdminManualProviderDashboard),
+  p("/gourav-ankit-adi/manual-provider/providers", AdminManualProviders),
+  p("/gourav-ankit-adi/manual-provider/providers/$id", AdminManualProviderDetail),
+  p("/gourav-ankit-adi/manual-provider/requests", AdminManualProviderRequests),
+  p("/gourav-ankit-adi/manual-provider/disputes", AdminManualProviderDisputes),
+  p("/gourav-ankit-adi/manual-provider/settlements", AdminManualProviderSettlements),
+  p("/gourav-ankit-adi/manual-provider/settings", AdminManualProviderSettings),
 ];

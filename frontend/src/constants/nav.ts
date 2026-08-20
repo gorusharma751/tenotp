@@ -4,16 +4,21 @@ import {
   Activity, Star, Bookmark, Download, ScrollText, Receipt, Undo2, BadgeDollarSign,
   Gauge, Wrench, Puzzle, Globe2, Server, BarChart3, FileWarning, ShieldCheck,
   Megaphone, TicketPercent, Image as ImageIcon, Cog, ClipboardList, HardDrive,
-  Users2, KeySquare, BookOpen,
+  Users2, KeySquare, BookOpen, Store, DollarSign, AlertTriangle,
 } from "lucide-react";
 import { PlugZap, Radio, Rss, Zap, Siren, HeartPulse, Workflow } from "lucide-react";
 
-export type NavItem = { title: string; url: string; icon: any; group?: string };
+// adminOnly: soft-launched features that are pushed live but only shown
+// to admin accounts for now (still under test in production) — filtered
+// out of the nav for regular users in DashboardShell, and the route
+// itself redirects a non-admin away even if they hit the URL directly.
+export type NavItem = { title: string; url: string; icon: any; group?: string; adminOnly?: boolean };
 
 export const USER_NAV: NavItem[] = [
   { title: "Overview", url: "/dashboard", icon: LayoutDashboard, group: "Main" },
   { title: "How to use", url: "/dashboard/how-to-use", icon: BookOpen, group: "Main" },
   { title: "Buy Number", url: "/dashboard/buy-number", icon: ShoppingCart, group: "Main" },
+  { title: "Manual Provider", url: "/dashboard/manual-provider", icon: Store, group: "Main", adminOnly: true },
   { title: "Orders", url: "/dashboard/orders", icon: Package, group: "Main" },
   { title: "OTP Inbox", url: "/dashboard/otp-inbox", icon: Inbox, group: "Main" },
 
@@ -53,6 +58,13 @@ export const ADMIN_NAV: NavItem[] = [
 
   { title: "Admins", url: "/gourav-ankit-adi/gourav-ankit-adis", icon: ShieldCheck, group: "Access" },
   { title: "Resellers", url: "/gourav-ankit-adi/resellers", icon: Users2, group: "Access" },
+
+  { title: "Dashboard", url: "/gourav-ankit-adi/manual-provider", icon: LayoutDashboard, group: "Manual Provider" },
+  { title: "Providers", url: "/gourav-ankit-adi/manual-provider/providers", icon: Store, group: "Manual Provider" },
+  { title: "Requests", url: "/gourav-ankit-adi/manual-provider/requests", icon: ClipboardList, group: "Manual Provider" },
+  { title: "Disputes", url: "/gourav-ankit-adi/manual-provider/disputes", icon: AlertTriangle, group: "Manual Provider" },
+  { title: "Settlements", url: "/gourav-ankit-adi/manual-provider/settlements", icon: DollarSign, group: "Manual Provider" },
+  { title: "Settings", url: "/gourav-ankit-adi/manual-provider/settings", icon: Settings, group: "Manual Provider" },
 
   { title: "Notifications", url: "/gourav-ankit-adi/notifications", icon: Bell, group: "Marketing" },
   { title: "Coupons", url: "/gourav-ankit-adi/coupons", icon: TicketPercent, group: "Marketing" },

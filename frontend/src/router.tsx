@@ -22,6 +22,7 @@ import ResetPassword from "@/routes/auth/reset-password";
 import { dashboardLayoutRoute, dashboardChildRoutes } from "@/routeGroups/dashboard";
 import { publicLayoutRoute, publicChildRoutes } from "@/routeGroups/public";
 import { adminLayoutRoute, adminChildRoutes } from "@/routeGroups/admin";
+import { sellerLayoutRoute, sellerChildRoutes } from "@/routeGroups/seller";
 import { logoutRoute } from "@/routes/logout";
 import { unauthorizedRoute } from "@/routes/unauthorized";
 import { maintenanceRoute } from "@/routes/maintenance";
@@ -125,6 +126,7 @@ const routeTree = rootRoute.addChildren([
   dashboardLayoutRoute.addChildren(dashboardChildRoutes),
   publicLayoutRoute.addChildren(publicChildRoutes),
   adminLayoutRoute.addChildren(adminChildRoutes),
+  sellerLayoutRoute.addChildren(sellerChildRoutes),
   logoutRoute,
   unauthorizedRoute,
   maintenanceRoute,

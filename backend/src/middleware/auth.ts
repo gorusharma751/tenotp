@@ -36,6 +36,17 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/** Like requireAuth, but also 403s unless the session has the "provider"
+ * role (Manual Provider sellers — an extra role on a normal user account,
+ * granted by admin, not a separate account system). */
+export function requireProvider(req: Request, res: Response, next: NextFunction) {
+  const claims = claimsFrom(req);
+  if (!claims) return res.status(401).json({ error: "Unauthorized: No valid session" });
+  if (!claims.roles.includes("provider")) return res.status(403).json({ error: "Forbidden" });
+  req.auth = { userId: claims.sub, email: claims.email, roles: claims.roles };
+  next();
+}
+
 /** Never rejects — req.auth.userId is "" for guests. Use for endpoints that
  * should gracefully return empty results instead of erroring for logged-out
  * visitors (mirrors the old optionalAuth TanStack middleware). */

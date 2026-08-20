@@ -14,6 +14,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   // users (was profiles + user_roles + auth.users)
   await db.collection("users").createIndex({ email: 1 }, { unique: true, collation: { locale: "en", strength: 2 } });
   await db.collection("users").createIndex({ referralCode: 1 }, { unique: true, sparse: true });
+  await db.collection("users").createIndex({ username: 1 }, { unique: true, sparse: true });
   await db.collection("users").createIndex({ referredBy: 1 });
 
   // countries / services (catalog) — these collections key on their own
@@ -120,4 +121,28 @@ export async function ensureIndexes(db: Db): Promise<void> {
   );
   await db.collection("payment_events").createIndex({ paymentOrderId: 1 });
   await db.collection("credit_ledger").createIndex({ userId: 1, createdAt: -1 });
+
+  // Manual Provider module
+  await db.collection("manual_providers").createIndex({ userId: 1 }, { unique: true });
+  await db.collection("manual_provider_services").createIndex({ providerId: 1 });
+  await db.collection("manual_provider_services").createIndex({ status: 1, availability: 1, country: 1, service: 1 });
+  await db.collection("manual_provider_requests").createIndex({ code: 1 }, { unique: true });
+  await db.collection("manual_provider_requests").createIndex({ buyerUserId: 1, createdAt: -1 });
+  await db.collection("manual_provider_requests").createIndex({ providerId: 1, createdAt: -1 });
+  await db.collection("manual_provider_requests").createIndex({ status: 1 });
+  await db.collection("manual_provider_transactions").createIndex({ providerId: 1, createdAt: -1 });
+  await db.collection("manual_provider_settlements").createIndex({ providerId: 1, createdAt: -1 });
+  await db.collection("manual_provider_settlements").createIndex({ status: 1 });
+  await db.collection("manual_provider_activity_logs").createIndex({ createdAt: -1 });
+  await db.collection("manual_provider_disputes").createIndex({ requestId: 1 });
+  await db.collection("manual_provider_disputes").createIndex({ buyerUserId: 1, status: 1 });
+  await db.collection("manual_provider_disputes").createIndex({ providerId: 1, createdAt: -1 });
+  await db.collection("manual_provider_reviews").createIndex({ requestId: 1 }, { unique: true });
+  await db.collection("manual_provider_reviews").createIndex({ providerId: 1, createdAt: -1 });
+  await db.collection("manual_provider_bids").createIndex({ requestId: 1, status: 1 });
+  await db.collection("manual_provider_bids").createIndex({ providerId: 1, createdAt: -1 });
+  await db.collection("manual_provider_requests").createIndex({ status: 1, country: 1, serviceName: 1 });
+  // "agar new number manga hai to same number dobara mat do" — one doc
+  // per number a seller has ever handed out for a service+country.
+  await db.collection("manual_provider_used_numbers").createIndex({ providerId: 1, country: 1, service: 1, number: 1 }, { unique: true });
 }

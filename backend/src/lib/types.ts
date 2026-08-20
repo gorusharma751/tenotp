@@ -8,6 +8,12 @@ export type UserDoc = {
   country?: string;
   phone?: string;
   avatarUrl?: string;
+  /** Public-facing handle — unique per user, shown on Manual Provider
+   * profiles (buyer viewing a seller, seller viewing a buyer) instead of
+   * their real name/email/phone. Optional on the type only because
+   * accounts created before this feature don't have one yet; every read
+   * path that needs it calls ensureUsername() to backfill lazily. */
+  username?: string;
   referralCode: string;
   referredBy?: string | null;
   walletBalance: number;
@@ -29,6 +35,11 @@ export type PublicUserDto = {
   name: string;
   email: string;
   role: "user" | "admin";
+  /** Raw roles array (e.g. includes "provider" for a Manual Provider
+   * seller) — `role` above stays admin/user-only for backward
+   * compatibility with existing checks; anything needing a finer-grained
+   * role (like the Seller Panel guard) reads this instead. */
+  roles: string[];
   createdAt: string;
   wallet: number;
   verified: true;
@@ -42,6 +53,7 @@ export function toPublicUser(doc: UserDoc): PublicUserDto {
     name: doc.name,
     email: doc.email,
     role: isAdmin ? "admin" : "user",
+    roles: doc.roles,
     createdAt: doc.createdAt.toISOString(),
     wallet: Number(doc.walletBalance ?? 0),
     verified: true,
