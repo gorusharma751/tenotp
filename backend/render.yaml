@@ -40,6 +40,8 @@ services:
         value: Tenotp
       - key: AUTH_JWT_SECRET
         generateValue: true
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false # from @BotFather — Telegram Mini App login won't work until this is set
       - key: PAYMENT_PROVIDER
         value: bharatpe
       - key: PAYMENT_ENCRYPTION_KEY

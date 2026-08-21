@@ -6,6 +6,7 @@ import { safeError } from "@/lib/errors";
 import { emailSchema, passwordSchema, nameSchema, referralCodeSchema } from "@/lib/validation";
 import { useUserStore } from "@/store/userStore";
 import { api, setToken, getToken } from "@/lib/apiClient";
+import { isTelegramMiniApp, loginWithTelegram } from "@/lib/telegram";
 import type { User } from "@/types";
 
 export interface SignUpInput {
@@ -85,8 +86,14 @@ export async function updatePassword(newPasswordInput: string, resetToken?: stri
 export async function syncSessionToStore() {
   // No stored token at all (never logged in on this device, or already
   // signed out) — nothing to check, and calling /api/auth/session would
-  // just fail. Skip the round-trip.
+  // just fail. Inside the Telegram Mini App, though, "logged out" doesn't
+  // really exist — Telegram already knows who they are, so log them
+  // straight in instead of showing a login screen (see lib/telegram.ts).
   if (!getToken()) {
+    if (isTelegramMiniApp()) {
+      const user = await loginWithTelegram();
+      if (user) { applyToStore(user); return; }
+    }
     applyToStore(null);
     return;
   }

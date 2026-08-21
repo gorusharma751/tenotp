@@ -2,6 +2,7 @@ import { Router } from "express";
 import { getCollection } from "../lib/mongo.ts";
 import { hashPassword, verifyPassword } from "../lib/auth/password.ts";
 import { signSessionToken } from "../lib/auth/jwt.ts";
+import { verifyTelegramInitData } from "../lib/auth/telegram.ts";
 import { checkAuthLimit, clientIpFrom } from "../lib/rateLimit.ts";
 import { emailSchema, passwordSchema, nameSchema, referralCodeSchema } from "../lib/validation.ts";
 import { toPublicUser, type UserDoc } from "../lib/types.ts";
@@ -110,6 +111,49 @@ authRouter.post("/signin", async (req, res) => {
     res.json({ token, user: toPublicUser(doc) });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Sign in failed" });
+  }
+});
+
+/** Telegram Mini App login — the ONLY way in is a fresh, signature-verified
+ * `initData` string handed over by the Telegram client itself when the Mini
+ * App launches (see lib/auth/telegram.ts). First launch creates an account
+ * (synthetic email, random unusable password — this account only ever logs
+ * in via Telegram), every launch after that finds it by telegramId and just
+ * signs a normal session token. From here on it's the exact same account/
+ * session/wallet/everything as the website — no separate Telegram-only data. */
+authRouter.post("/telegram", async (req, res) => {
+  try {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) throw new Error("Telegram login isn't configured on this server yet");
+    const initData = String(req.body?.initData ?? "");
+    const tgUser = verifyTelegramInitData(initData, botToken);
+    if (!tgUser) throw new Error("Could not verify Telegram login — please relaunch the app");
+
+    const users = await usersCollection();
+    const telegramId = String(tgUser.id);
+    let doc = await users.findOne({ telegramId });
+
+    if (!doc) {
+      const now = new Date();
+      const email = `tg_${telegramId}@telegram.local`;
+      const name = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ").trim() || tgUser.username || `Telegram User ${telegramId}`;
+      doc = {
+        _id: crypto.randomUUID(), email, emailLower: email.toLowerCase(),
+        passwordHash: await hashPassword(crypto.randomUUID()), // unusable — this account only ever logs in via Telegram
+        name: nameSchema.safeParse(name).success ? name : `Telegram User ${telegramId}`,
+        telegramId, referralCode: await generateReferralCode(users), referredBy: null, walletBalance: 0,
+        status: "active", roles: ["user"], createdAt: now, updatedAt: now,
+      };
+      await users.insertOne(doc);
+    } else if (doc.status === "blocked") {
+      throw new Error("This account has been blocked. Contact support.");
+    }
+
+    await users.updateOne({ _id: doc._id }, { $set: { lastLogin: new Date() } });
+    const token = signSessionToken({ sub: doc._id, email: doc.email, roles: doc.roles });
+    res.json({ token, user: toPublicUser(doc) });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Telegram login failed" });
   }
 });
 

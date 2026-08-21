@@ -15,6 +15,7 @@ export async function ensureIndexes(db: Db): Promise<void> {
   await db.collection("users").createIndex({ email: 1 }, { unique: true, collation: { locale: "en", strength: 2 } });
   await db.collection("users").createIndex({ referralCode: 1 }, { unique: true, sparse: true });
   await db.collection("users").createIndex({ username: 1 }, { unique: true, sparse: true });
+  await db.collection("users").createIndex({ telegramId: 1 }, { unique: true, sparse: true });
   await db.collection("users").createIndex({ referredBy: 1 });
 
   // countries / services (catalog) — these collections key on their own

@@ -14,6 +14,11 @@ export type UserDoc = {
    * accounts created before this feature don't have one yet; every read
    * path that needs it calls ensureUsername() to backfill lazily. */
   username?: string;
+  /** Set only for an account created via the Telegram Mini App login —
+   * lets repeat launches from the same Telegram user find their existing
+   * account instead of creating a new one each time. Absent for every
+   * account created the normal email/password way. */
+  telegramId?: string;
   referralCode: string;
   referredBy?: string | null;
   walletBalance: number;
