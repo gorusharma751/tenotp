@@ -43,7 +43,7 @@ services:
       - key: TELEGRAM_BOT_TOKEN
         sync: false # from @BotFather — Telegram Mini App login won't work until this is set
       - key: TELEGRAM_WEBHOOK_SECRET
-        generateValue: true # passed to Telegram's setWebhook call to verify incoming updates are real
+        sync: false # any random string — must match what setWebhook is called with, see README
       - key: FRONTEND_URL
         sync: false # e.g. https://tenotp.vercel.app — used for the bot's "Open TenOTP" button
       - key: PAYMENT_PROVIDER
