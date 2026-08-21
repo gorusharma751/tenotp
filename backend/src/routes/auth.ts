@@ -3,6 +3,7 @@ import { getCollection } from "../lib/mongo.ts";
 import { hashPassword, verifyPassword } from "../lib/auth/password.ts";
 import { signSessionToken } from "../lib/auth/jwt.ts";
 import { verifyTelegramInitData } from "../lib/auth/telegram.ts";
+import { findOrCreateTelegramUser } from "../lib/auth/telegramAccount.ts";
 import { checkAuthLimit, clientIpFrom } from "../lib/rateLimit.ts";
 import { emailSchema, passwordSchema, nameSchema, referralCodeSchema } from "../lib/validation.ts";
 import { toPublicUser, type UserDoc } from "../lib/types.ts";
@@ -129,26 +130,10 @@ authRouter.post("/telegram", async (req, res) => {
     const tgUser = verifyTelegramInitData(initData, botToken);
     if (!tgUser) throw new Error("Could not verify Telegram login — please relaunch the app");
 
+    const doc = await findOrCreateTelegramUser(tgUser);
+    if (doc.status === "blocked") throw new Error("This account has been blocked. Contact support.");
+
     const users = await usersCollection();
-    const telegramId = String(tgUser.id);
-    let doc = await users.findOne({ telegramId });
-
-    if (!doc) {
-      const now = new Date();
-      const email = `tg_${telegramId}@telegram.local`;
-      const name = [tgUser.first_name, tgUser.last_name].filter(Boolean).join(" ").trim() || tgUser.username || `Telegram User ${telegramId}`;
-      doc = {
-        _id: crypto.randomUUID(), email, emailLower: email.toLowerCase(),
-        passwordHash: await hashPassword(crypto.randomUUID()), // unusable — this account only ever logs in via Telegram
-        name: nameSchema.safeParse(name).success ? name : `Telegram User ${telegramId}`,
-        telegramId, referralCode: await generateReferralCode(users), referredBy: null, walletBalance: 0,
-        status: "active", roles: ["user"], createdAt: now, updatedAt: now,
-      };
-      await users.insertOne(doc);
-    } else if (doc.status === "blocked") {
-      throw new Error("This account has been blocked. Contact support.");
-    }
-
     await users.updateOne({ _id: doc._id }, { $set: { lastLogin: new Date() } });
     const token = signSessionToken({ sub: doc._id, email: doc.email, roles: doc.roles });
     res.json({ token, user: toPublicUser(doc) });

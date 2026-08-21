@@ -11,6 +11,7 @@ import { realtimeRouter } from "./routes/realtime.ts";
 import { referralsRouter } from "./routes/referrals.ts";
 import { catalogRouter } from "./routes/catalog.ts";
 import { manualProvidersRouter } from "./routes/manualProviders.ts";
+import { telegramWebhookRouter } from "./routes/telegramWebhook.ts";
 import { getDb } from "./lib/mongo.ts";
 import { ensureIndexes } from "./lib/ensureIndexes.ts";
 import { startProviderAutoSync } from "./lib/providers/autoSync.ts";
@@ -49,6 +50,7 @@ app.use("/api/realtime", realtimeRouter);
 app.use("/api/referrals", referralsRouter);
 app.use("/api/catalog", catalogRouter);
 app.use("/api/manual-providers", manualProvidersRouter);
+app.use("/api/telegram", telegramWebhookRouter);
 
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error(err);
