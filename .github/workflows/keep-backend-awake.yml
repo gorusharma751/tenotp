@@ -1,0 +1,25 @@
+# Keeps the live Render backend from spinning down. Render's free plan
+# ("plan: free" in backend/render.yaml) puts the web service to sleep after
+# ~15 minutes of no incoming requests — the next real visitor then eats a
+# 30-60s cold start, which is what "server band ho jata hai" on the live
+# site actually was. A local machine's Task Scheduler can't fix this (it
+# only pings while that PC happens to be on); this runs on GitHub's own
+# infrastructure instead, independent of anyone's laptop, every 10 minutes
+# — comfortably under Render's 15-minute idle window.
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: |
+          # -f fails on non-2xx so the step (and the run's status) reflects
+          # a real outage; a long timeout absorbs a cold start rather than
+          # reporting a false failure for the exact case this exists to prevent.
+          curl -fsS --max-time 90 https://tenotp-backend.onrender.com/health
