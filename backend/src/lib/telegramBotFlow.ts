@@ -114,80 +114,142 @@ interface ServiceRow {
   providerId: string; providerName: string; serverLabel: string; countryCode: string; avgSpeedSec: number | null; supportsMulti: boolean;
 }
 
-async function startBuyFlow(chatId: number) {
-  await setSession(String(chatId), "buy_country", {});
-  await sendMessage(chatId, '🌍 <b>Step 1 of 3</b> — type a country name\n\ne.g. "India", "USA", "Russia"', { keyboard: kb(NAV_HOME) });
+const PAGE = 8;
+
+/** Ranks a candidate against what the user typed. Exact beats
+ * starts-with beats contains, so "wh" surfaces WhatsApp above
+ * "Freshworks" — and anything sharing a decent prefix still shows up, so
+ * a near-miss or a typo'd name isn't a dead end ("koi zaroori nahi exact
+ * name hi de user, milta-julta ho toh woh bhi dikhna chahiye"). */
+function matchScore(name: string, q: string): number {
+  const n = name.toLowerCase();
+  if (!q) return 1;
+  if (n === q) return 100;
+  if (n.startsWith(q)) return 80;
+  if (n.includes(q)) return 60;
+  // Loose fallback: how much of a common prefix do they share?
+  let shared = 0;
+  while (shared < n.length && shared < q.length && n[shared] === q[shared]) shared++;
+  return shared >= 3 ? 20 + shared : 0;
+}
+function rank<T>(rows: T[], q: string, nameOf: (r: T) => string): T[] {
+  if (!q) return rows;
+  return rows
+    .map((r) => ({ r, s: matchScore(nameOf(r), q) }))
+    .filter((x) => x.s > 0)
+    .sort((a, b) => b.s - a.s)
+    .map((x) => x.r);
+}
+/** "‹ Prev / Next ›" row, only showing the arrows that actually go
+ * somewhere. `tag` is the callback prefix for this list. */
+function pageRow(tag: string, page: number, total: number): InlineButton[] {
+  const row: InlineButton[] = [];
+  if (page > 0) row.push({ text: "‹ Prev", callback_data: `${tag}:${page - 1}` });
+  if ((page + 1) * PAGE < total) row.push({ text: "Next ›", callback_data: `${tag}:${page + 1}` });
+  return row;
 }
 
-async function selectCountry(chatId: number, country: CountryRow) {
-  await setSession(String(chatId), "buy_service", { country });
-  await sendMessage(
-    chatId,
-    `✅ ${country.flag} <b>${country.name}</b> selected.\n\n🔍 <b>Step 2 of 3</b> — type a service name\n\ne.g. "WhatsApp", "Telegram", "Instagram"`,
-    { keyboard: kb([{ text: "🌍 Change country", callback_data: "m:buy" }], NAV_HOME) },
-  );
-}
-
-async function handleCountrySearch(chatId: number, userId: string, roles: string[], text: string) {
+async function startBuyFlow(chatId: number, userId: string, roles: string[]) {
+  // Countries come straight from the live catalog — same source the
+  // website's Buy Number page uses.
   const countries = await callSelfApi<CountryRow[]>(userId, roles, "GET", "/api/catalog/countries");
-  const q = text.trim().toLowerCase();
-  const matches = countries.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
-  if (matches.length === 0) {
-    await sendMessage(chatId, `❌ No country matched "${text}". Type another name.`, { keyboard: kb(NAV_HOME) });
-    return;
-  }
-  // Typing the country's actual name shouldn't then make you tap it again —
-  // only show the picker when the search is genuinely ambiguous.
-  const exact = matches.find((c) => c.name.toLowerCase() === q);
-  if (exact || matches.length === 1) {
-    await selectCountry(chatId, exact ?? matches[0]);
-    return;
-  }
-  await setSession(String(chatId), "buy_country_pick", { countries: matches });
-  await sendMessage(chatId, `Found ${matches.length} matches — pick one:`, {
-    keyboard: kb(...matches.map((c) => [{ text: `${c.flag} ${c.name} — from ₹${c.priceFrom}`, callback_data: `cty:${c.code}` }]), NAV_HOME),
-  });
+  await setSession(String(chatId), "buy_country", { countries, q: "" });
+  await showCountryPage(chatId, 0);
 }
 
-async function handleCountryPick(chatId: number, code: string) {
-  const session = await getSession(String(chatId));
-  const countries = (session.data.countries as CountryRow[] | undefined) ?? [];
-  const country = countries.find((c) => c.code === code);
-  if (!country) {
-    await startBuyFlow(chatId);
-    return;
-  }
-  await selectCountry(chatId, country);
-}
-
-async function handleServiceSearch(chatId: number, userId: string, roles: string[], text: string) {
-  const session = await getSession(String(chatId));
-  const country = session.data.country as CountryRow | undefined;
-  if (!country) {
-    await startBuyFlow(chatId);
-    return;
-  }
-  const rows = await callSelfApi<ServiceRow[]>(userId, roles, "POST", "/api/otp/services", { countryName: country.name, q: text.trim() });
-  if (rows.length === 0) {
-    await sendMessage(chatId, `❌ No service matched "${text}" in ${country.name}. Try another name.`, {
-      keyboard: kb([{ text: "🌍 Change country", callback_data: "m:buy" }], NAV_HOME),
+async function showCountryPage(chatId: number, page: number) {
+  const s = await getSession(String(chatId));
+  const all = (s.data.countries as CountryRow[] | undefined) ?? [];
+  const q = String(s.data.q ?? "");
+  const list = rank(all, q.toLowerCase(), (c) => c.name);
+  if (!list.length) {
+    await sendMessage(chatId, `❌ Nothing matched "${q}". Type something else, or tap below to see all.`, {
+      keyboard: kb([{ text: "🌍 Show all countries", callback_data: "cclr" }], NAV_HOME),
     });
     return;
   }
-  const top = rows.slice(0, 8);
-  await setSession(String(chatId), "buy_service_pick", { country, services: top });
-  await sendMessage(chatId, `🔍 <b>Step 3 of 3</b> — ${rows.length} option(s) for "${text}" in ${country.name}:`, {
-    keyboard: kb(...top.map((s, i) => [{ text: `${s.name} · ₹${s.price} · ${s.stock} left`, callback_data: `svc:${i}` }]), NAV_HOME),
+  const slice = list.slice(page * PAGE, page * PAGE + PAGE);
+  await setSession(String(chatId), "buy_country", { ...s.data, page });
+  const header = q ? `🌍 <b>Step 1 of 3</b> — ${list.length} match(es) for "${q}"` : `🌍 <b>Step 1 of 3</b> — pick a country (${list.length} available)`;
+  await sendMessage(chatId, `${header}\n\n💡 Or just type a country name to search.`, {
+    keyboard: kb(
+      ...slice.map((c) => [{ text: `${c.flag} ${c.name} — from ₹${c.priceFrom}`, callback_data: `cty:${c.code}` }]),
+      pageRow("cpg", page, list.length),
+      ...(q ? [[{ text: "🌍 Show all", callback_data: "cclr" }]] : []),
+      NAV_HOME,
+    ),
   });
 }
 
-async function handleServicePick(chatId: number, idx: number) {
+async function handleCountrySearch(chatId: number, text: string) {
+  const s = await getSession(String(chatId));
+  await setSession(String(chatId), "buy_country", { ...s.data, q: text.trim(), page: 0 });
+  await showCountryPage(chatId, 0);
+}
+
+async function handleCountryPick(chatId: number, userId: string, roles: string[], code: string) {
+  const s = await getSession(String(chatId));
+  const countries = (s.data.countries as CountryRow[] | undefined) ?? [];
+  const country = countries.find((c) => c.code === code);
+  if (!country) { await startBuyFlow(chatId, userId, roles); return; }
+  await loadServices(chatId, userId, roles, country);
+}
+
+async function loadServices(chatId: number, userId: string, roles: string[], country: CountryRow) {
+  await sendMessage(chatId, `⏳ Loading services for ${country.flag} ${country.name}…`);
+  // Empty q = the country's whole live list, exactly what the website's
+  // service picker shows; we page through it here instead of asking the
+  // user to guess a name.
+  const rows = await callSelfApi<ServiceRow[]>(userId, roles, "POST", "/api/otp/services", { countryName: country.name, q: "" });
+  if (!rows.length) {
+    await sendMessage(chatId, `😕 No services available for ${country.name} right now.`, {
+      keyboard: kb([{ text: "🌍 Pick another country", callback_data: "m:buy" }], NAV_HOME),
+    });
+    return;
+  }
+  await setSession(String(chatId), "buy_service", { country, services: rows, q: "", page: 0 });
+  await showServicePage(chatId, 0);
+}
+
+async function showServicePage(chatId: number, page: number) {
+  const s = await getSession(String(chatId));
+  const country = s.data.country as CountryRow | undefined;
+  const all = (s.data.services as ServiceRow[] | undefined) ?? [];
+  if (!country) return;
+  const q = String(s.data.q ?? "");
+  const list = rank(all, q.toLowerCase(), (r) => r.name);
+  if (!list.length) {
+    await sendMessage(chatId, `❌ No service matched "${q}" in ${country.name}.`, {
+      keyboard: kb([{ text: "📋 Show all services", callback_data: "sclr" }], [{ text: "🌍 Change country", callback_data: "m:buy" }, ...NAV_HOME]),
+    });
+    return;
+  }
+  const slice = list.slice(page * PAGE, page * PAGE + PAGE);
+  await setSession(String(chatId), "buy_service", { ...s.data, page });
+  const header = q ? `🔍 <b>Step 2 of 3</b> — ${list.length} match(es) for "${q}"` : `🔍 <b>Step 2 of 3</b> — ${country.flag} ${country.name} · ${list.length} services`;
+  await sendMessage(chatId, `${header}\n\n💡 Or type a service name to search.`, {
+    keyboard: kb(
+      ...slice.map((r) => [{ text: `${r.name} · ₹${r.price} · ${r.stock} left`, callback_data: `svc:${all.indexOf(r)}` }]),
+      pageRow("spg", page, list.length),
+      ...(q ? [[{ text: "📋 Show all", callback_data: "sclr" }]] : []),
+      [{ text: "🌍 Change country", callback_data: "m:buy" }, ...NAV_HOME],
+    ),
+  });
+}
+
+async function handleServiceSearch(chatId: number, text: string) {
+  const s = await getSession(String(chatId));
+  await setSession(String(chatId), "buy_service", { ...s.data, q: text.trim(), page: 0 });
+  await showServicePage(chatId, 0);
+}
+
+async function handleServicePick(chatId: number, userId: string, roles: string[], idx: number) {
   const session = await getSession(String(chatId));
   const country = session.data.country as CountryRow | undefined;
   const services = (session.data.services as ServiceRow[] | undefined) ?? [];
   const service = services[idx];
   if (!country || !service) {
-    await startBuyFlow(chatId);
+    await startBuyFlow(chatId, userId, roles);
     return;
   }
   await setSession(String(chatId), "buy_confirm", { country, service });
@@ -203,7 +265,7 @@ async function handleBuyConfirm(chatId: number, userId: string, roles: string[])
   const country = session.data.country as CountryRow | undefined;
   const service = session.data.service as ServiceRow | undefined;
   if (!country || !service) {
-    await startBuyFlow(chatId);
+    await startBuyFlow(chatId, userId, roles);
     return;
   }
   await clearSession(String(chatId));
@@ -510,7 +572,7 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
     await showManualHome(chatId);
     return;
   }
-  if (cmd === "/buy" || cmd === "/search") { await startBuyFlow(chatId); return; }
+  if (cmd === "/buy" || cmd === "/search") { await startBuyFlow(chatId, user._id, roles); return; }
   if (cmd === "/deposit") { await startDepositFlow(chatId); return; }
   if (cmd === "/balance") { await showBalance(chatId, user._id, roles); return; }
   if (cmd === "/orders") { await showOrders(chatId, user._id, roles); return; }
@@ -525,8 +587,8 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
     // Manual Provider steps live in their own module — let it claim the
     // message first if one of its flows is mid-way.
     if (session.step.startsWith("mp_") && await handleManualText(chatId, user._id, roles, session.step, text)) return;
-    if (session.step === "buy_country") { await handleCountrySearch(chatId, user._id, roles, text); return; }
-    if (session.step === "buy_service") { await handleServiceSearch(chatId, user._id, roles, text); return; }
+    if (session.step === "buy_country") { await handleCountrySearch(chatId, text); return; }
+    if (session.step === "buy_service") { await handleServiceSearch(chatId, text); return; }
     if (session.step === "deposit_amount") { await createDeposit(chatId, user._id, roles, Number(text.trim().replace(/[₹,\s]/g, ""))); return; }
     if (session.step === "deposit_utr") { await handleUtrSubmit(chatId, user._id, roles, text); return; }
     if (session.step === "link_email") { await handleLinkEmail(chatId, text); return; }
@@ -562,14 +624,18 @@ export async function handleCallback(chatId: number, callbackQueryId: string, fr
       return;
     }
     if (data === "m:menu") { await clearSession(String(chatId)); await sendWelcome(chatId, user); return; }
-    if (data === "m:buy" || data === "m:search") { await startBuyFlow(chatId); return; }
+    if (data === "m:buy" || data === "m:search") { await startBuyFlow(chatId, user._id, roles); return; }
     if (data === "m:deposit") { await startDepositFlow(chatId); return; }
     if (data === "m:balance") { await showBalance(chatId, user._id, roles); return; }
     if (data === "m:orders") { await showOrders(chatId, user._id, roles); return; }
     if (data === "m:refer") { await showReferrals(chatId, user._id, roles, user); return; }
     if (data === "m:help") { await sendMessage(chatId, HELP_TEXT, { keyboard: kb(NAV_HOME) }); return; }
-    if (data.startsWith("cty:")) { await handleCountryPick(chatId, data.slice(4)); return; }
-    if (data.startsWith("svc:")) { await handleServicePick(chatId, Number(data.slice(4))); return; }
+    if (data.startsWith("cpg:")) { await showCountryPage(chatId, Number(data.slice(4))); return; }
+    if (data.startsWith("spg:")) { await showServicePage(chatId, Number(data.slice(4))); return; }
+    if (data === "cclr") { const s = await getSession(String(chatId)); await setSession(String(chatId), "buy_country", { ...s.data, q: "", page: 0 }); await showCountryPage(chatId, 0); return; }
+    if (data === "sclr") { const s = await getSession(String(chatId)); await setSession(String(chatId), "buy_service", { ...s.data, q: "", page: 0 }); await showServicePage(chatId, 0); return; }
+    if (data.startsWith("cty:")) { await handleCountryPick(chatId, user._id, roles, data.slice(4)); return; }
+    if (data.startsWith("svc:")) { await handleServicePick(chatId, user._id, roles, Number(data.slice(4))); return; }
     if (data === "buy_confirm") { await handleBuyConfirm(chatId, user._id, roles); return; }
     if (data.startsWith("otp:")) { await handleCheckOtp(chatId, user._id, roles, data.slice(4)); return; }
     if (data.startsWith("cancel:")) { await handleCancelOrder(chatId, user._id, roles, data.slice(7)); return; }
