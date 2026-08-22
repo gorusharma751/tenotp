@@ -65,6 +65,10 @@ export async function sendMessage(
   if (opts?.replyKeyboard) payload.reply_markup = opts.replyKeyboard;
   else if (opts?.keyboard) payload.reply_markup = opts.keyboard;
   else if (opts?.withAppButton) payload.reply_markup = { inline_keyboard: [[appButton(opts.appButtonText, opts.appPath)]] };
+  // Nothing else claimed reply_markup — re-send the persistent panel so it
+  // can never end up hidden mid-flow ("baaki ke button kyun gayab hue, vo
+  // toh rehne hi chahiye"). Telegram just keeps showing the same panel.
+  else payload.reply_markup = mainReplyKeyboard();
   return callTelegramApi("sendMessage", payload);
 }
 

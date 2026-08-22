@@ -59,12 +59,28 @@ async function startBuyFlow(chatId: number) {
   await sendMessage(chatId, '🌍 Type a country name to search (e.g. "India", "USA")...');
 }
 
+/** Moves the flow to "now search a service", shared by the auto-select
+ * path and the button-pick path so both behave identically. */
+async function selectCountry(chatId: number, country: CountryRow) {
+  await setSession(String(chatId), "buy_service", { country });
+  await sendMessage(chatId, `📍 ${country.flag} ${country.name} selected.\n\nNow type a service name to search (e.g. "WhatsApp", "Telegram")...`);
+}
+
 async function handleCountrySearch(chatId: number, userId: string, roles: string[], text: string) {
   const countries = await callSelfApi<CountryRow[]>(userId, roles, "GET", "/api/catalog/countries");
   const q = text.trim().toLowerCase();
   const matches = countries.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
   if (matches.length === 0) {
     await sendMessage(chatId, "No countries matched that — try again, or /menu to go back.");
+    return;
+  }
+  // "jab India likh diya to select hona chahiye" — typing the country's
+  // actual name (or something only one country matches) shouldn't then ask
+  // you to tap it again. Only offer the picker when the search is genuinely
+  // ambiguous.
+  const exact = matches.find((c) => c.name.toLowerCase() === q);
+  if (exact || matches.length === 1) {
+    await selectCountry(chatId, exact ?? matches[0]);
     return;
   }
   await setSession(String(chatId), "buy_country_pick", { countries: matches });
@@ -81,8 +97,7 @@ async function handleCountryPick(chatId: number, code: string) {
     await setSession(String(chatId), "buy_country", {});
     return;
   }
-  await setSession(String(chatId), "buy_service", { country });
-  await sendMessage(chatId, `📍 ${country.flag} ${country.name} selected.\n\nNow type a service name to search (e.g. "WhatsApp", "Telegram")...`);
+  await selectCountry(chatId, country);
 }
 
 async function handleServiceSearch(chatId: number, userId: string, roles: string[], text: string) {
