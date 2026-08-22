@@ -6,7 +6,7 @@ import {
   Megaphone, TicketPercent, Image as ImageIcon, Cog, ClipboardList, HardDrive,
   Users2, KeySquare, BookOpen, Store, DollarSign, AlertTriangle,
 } from "lucide-react";
-import { PlugZap, Radio, Rss, Zap, Siren, HeartPulse, Workflow, Send } from "lucide-react";
+import { PlugZap, Radio, Rss, Zap, Siren, HeartPulse, Workflow, Send, Bitcoin } from "lucide-react";
 
 // adminOnly: soft-launched features that are pushed live but only shown
 // to admin accounts for now (still under test in production) — filtered
@@ -52,6 +52,7 @@ export const ADMIN_NAV: NavItem[] = [
   { title: "Tickets", url: "/gourav-ankit-adi/tickets", icon: Ticket, group: "Support" },
 
   { title: "Telegram Bot", url: "/gourav-ankit-adi/telegram", icon: Send, group: "System" },
+  { title: "Crypto Deposits", url: "/gourav-ankit-adi/crypto", icon: Bitcoin, group: "System" },
   { title: "Settings", url: "/gourav-ankit-adi/settings", icon: Settings, group: "System" },
   { title: "Providers", url: "/gourav-ankit-adi/providers", icon: PlugZap, group: "System" },
   { title: "Pricing", url: "/gourav-ankit-adi/pricing", icon: BadgeDollarSign, group: "System" },

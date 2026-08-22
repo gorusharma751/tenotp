@@ -612,3 +612,88 @@ paymentsRouter.post("/razorpay/admin-config", requireAdmin, async (req, res) => 
     res.status(400).json({ error: err instanceof Error ? err.message : "Could not save Razorpay config" });
   }
 });
+
+/* =========================================================================
+ * USDT (crypto) deposits — user sends to our address and submits the tx
+ * hash, which is verified on-chain before anything is credited. Money
+ * still moves only through approveDeposit, same as every other method.
+ * See lib/crypto.ts for the verification rules.
+ * ========================================================================= */
+
+paymentsRouter.get("/crypto/config", requireAuth, async (_req, res) => {
+  try {
+    const { loadCryptoConfig, isCryptoReady } = await import("../lib/crypto.ts");
+    const cfg = await loadCryptoConfig();
+    // Public-safe subset only — never the BscScan key.
+    res.json({
+      enabled: isCryptoReady(cfg),
+      rate: cfg.usdt_inr_rate,
+      minUsdt: cfg.min_usdt,
+      networks: [
+        ...(cfg.address_trc20 ? [{ id: "trc20", label: "USDT · TRC20 (Tron)" }] : []),
+        ...(cfg.address_bep20 ? [{ id: "bep20", label: "USDT · BEP20 (BSC)" }] : []),
+      ],
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not load crypto config" });
+  }
+});
+
+paymentsRouter.post("/crypto/create", requireAuth, async (req, res) => {
+  try {
+    const amount = Number(req.body?.amount);
+    const network = req.body?.network === "bep20" ? "bep20" : "trc20";
+    const { createCryptoSession } = await import("../lib/crypto.ts");
+    const s = await createCryptoSession(req.auth.userId, amount, network);
+    res.json({
+      sessionId: s._id, network: s.network, address: s.address,
+      expectedUsdt: s.expectedUsdt, inrAmount: s.inrAmount, rate: s.rate,
+      expiresAt: s.expiresAt.toISOString(),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not start deposit" });
+  }
+});
+
+paymentsRouter.post("/crypto/submit", requireAuth, async (req, res) => {
+  try {
+    const sessionId = String(req.body?.sessionId ?? "");
+    const txHash = String(req.body?.txHash ?? "");
+    const { verifyAndCreditCrypto } = await import("../lib/crypto.ts");
+    const out = await verifyAndCreditCrypto(sessionId, req.auth.userId, txHash);
+    res.json(out);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not verify" });
+  }
+});
+
+paymentsRouter.get("/crypto/admin-config", requireAdmin, async (_req, res) => {
+  try {
+    const { loadCryptoConfig } = await import("../lib/crypto.ts");
+    const cfg = await loadCryptoConfig();
+    res.json({ ...cfg, bscscan_api_key: cfg.bscscan_api_key ? "********" : "" });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not load" });
+  }
+});
+
+paymentsRouter.post("/crypto/admin-config", requireAdmin, async (req, res) => {
+  try {
+    const { patchCryptoConfig } = await import("../lib/crypto.ts");
+    const body = req.body ?? {};
+    const patch: Record<string, unknown> = {};
+    if (body.enabled !== undefined) patch.enabled = Boolean(body.enabled);
+    if (body.address_trc20 !== undefined) patch.address_trc20 = String(body.address_trc20).trim();
+    if (body.address_bep20 !== undefined) patch.address_bep20 = String(body.address_bep20).trim();
+    if (body.usdt_inr_rate !== undefined) patch.usdt_inr_rate = Math.max(0, Number(body.usdt_inr_rate));
+    if (body.min_usdt !== undefined) patch.min_usdt = Math.max(0, Number(body.min_usdt));
+    if (body.confirmations_required !== undefined) patch.confirmations_required = Math.max(1, Math.round(Number(body.confirmations_required)));
+    // Masked value means "leave it alone" — otherwise loading the page and
+    // saving would wipe the stored key.
+    if (body.bscscan_api_key !== undefined && body.bscscan_api_key !== "********") patch.bscscan_api_key = String(body.bscscan_api_key).trim();
+    const cfg = await patchCryptoConfig(patch);
+    res.json({ ...cfg, bscscan_api_key: cfg.bscscan_api_key ? "********" : "" });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not save" });
+  }
+});

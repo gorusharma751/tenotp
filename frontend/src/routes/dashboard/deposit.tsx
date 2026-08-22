@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { Loader2, Copy, Clock, CheckCircle2, XCircle, Smartphone, ExternalLink } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useContactLinks } from "@/hooks/useContactLinks";
 import { Send } from "lucide-react";
 import { useUserStore } from "@/store/userStore";
@@ -61,6 +61,8 @@ export default function Deposit() {
   const bpeAutoEnabled = paytmStatus.data?.bharatpeEnabled ?? false;
   const razorpayStatus = useQuery({ queryKey: ["razorpay-config"], queryFn: () => api.get<{ enabled: boolean }>("/api/payments/razorpay/config") });
   const razorpayEnabled = razorpayStatus.data?.enabled ?? false;
+  const cryptoCfg = useQuery({ queryKey: ["crypto-config"], queryFn: () => api.get<CryptoCfg>("/api/payments/crypto/config") });
+  const cryptoEnabled = (cryptoCfg.data?.enabled ?? false) && (cryptoCfg.data?.networks.length ?? 0) > 0;
   const [rzpBusy, setRzpBusy] = useState(false);
   const qc = useQueryClient();
 
@@ -138,7 +140,13 @@ export default function Deposit() {
             <Tabs defaultValue="INR">
               <TabsList className="mb-4">
                 <TabsTrigger value="INR">🇮🇳 INR</TabsTrigger>
+                {cryptoEnabled && <TabsTrigger value="USDT">₮ USDT</TabsTrigger>}
               </TabsList>
+              {cryptoEnabled && (
+                <TabsContent value="USDT">
+                  <CryptoDepositCard config={cryptoCfg.data!} />
+                </TabsContent>
+              )}
               <TabsContent value="INR">
                 {razorpayEnabled && (
                   <div className="mb-5 rounded-xl border border-primary/30 bg-primary/5 p-4">
@@ -436,6 +444,118 @@ function PaytmQrCard({ amount, setAmount, presets, provider, title, ttlMinutes =
           <XCircle className="h-4 w-4 text-destructive" /> Payment failed. Try again with a new QR.
         </div>
       )}
+    </div>
+  );
+}
+
+/* ---------------- USDT (crypto) deposit ---------------- */
+
+interface CryptoCfg {
+  enabled: boolean;
+  rate: number;
+  minUsdt: number;
+  networks: Array<{ id: string; label: string }>;
+}
+interface CryptoSession {
+  sessionId: string; network: string; address: string;
+  expectedUsdt: number; inrAmount: number; rate: number; expiresAt: string;
+}
+
+function CryptoDepositCard({ config }: { config: CryptoCfg }) {
+  const [network, setNetwork] = useState(config.networks[0]?.id ?? "trc20");
+  const [amount, setAmount] = useState(500);
+  const [session, setSession] = useState<CryptoSession | null>(null);
+  const [txHash, setTxHash] = useState("");
+
+  const createM = useMutation({
+    mutationFn: () => api.post<CryptoSession>("/api/payments/crypto/create", { amount, network }),
+    onSuccess: (s) => setSession(s),
+    onError: (e: any) => toast.error(e?.message || "Could not start deposit"),
+  });
+  const submitM = useMutation({
+    mutationFn: () => api.post<{ credited: boolean; message: string; balance: number | null }>("/api/payments/crypto/submit", { sessionId: session!.sessionId, txHash }),
+    onSuccess: (r) => {
+      if (r.credited) {
+        toast.success(r.message);
+        setSession(null); setTxHash("");
+      } else {
+        // Not an error — the transfer just isn't visible/confirmed yet, so
+        // keep the form as-is so they can retry the same hash.
+        toast.info(r.message);
+      }
+    },
+    onError: (e: any) => toast.error(e?.message || "Could not verify"),
+  });
+
+  if (!session) {
+    return (
+      <div className="space-y-4">
+        <div>
+          <Label className="mb-1.5 block">Network</Label>
+          <div className="flex flex-wrap gap-2">
+            {config.networks.map((n) => (
+              <Button key={n.id} type="button" size="sm" variant={network === n.id ? "default" : "outline"} className={network === n.id ? "gradient-brand" : ""} onClick={() => setNetwork(n.id)}>
+                {n.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <AmountBlock amount={amount} setAmount={setAmount} presets={INR_PRESETS} />
+        <p className="text-xs text-muted-foreground">
+          1 USDT = ₹{config.rate} · you'll send ≈ <b>{(amount / config.rate).toFixed(2)} USDT</b> · minimum {config.minUsdt} USDT
+        </p>
+        <Button className="gradient-brand" disabled={createM.isPending} onClick={() => createM.mutate()}>
+          {createM.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Continue
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-warning/40 bg-warning/5 p-3 text-xs">
+        ⚠️ Send <b>only USDT on {session.network.toUpperCase()}</b> to this address. Any other coin or network cannot be recovered.
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-4 items-start">
+        <img
+          src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(session.address)}`}
+          alt="Deposit address QR"
+          className="rounded-xl border bg-white p-2 shrink-0"
+          width={200}
+          height={200}
+        />
+        <div className="space-y-2 min-w-0 flex-1">
+          <div>
+            <Label className="text-xs">Send exactly</Label>
+            <p className="text-2xl font-bold tabular-nums">{session.expectedUsdt} USDT</p>
+            <p className="text-xs text-muted-foreground">= ₹{session.inrAmount.toFixed(2)} at 1 USDT = ₹{session.rate}</p>
+          </div>
+          <div>
+            <Label className="text-xs">{session.network.toUpperCase()} address</Label>
+            <button
+              type="button"
+              onClick={() => { navigator.clipboard.writeText(session.address); toast.success("Address copied"); }}
+              className="w-full text-left font-mono text-xs break-all rounded-lg border px-2.5 py-2 hover:border-primary/60"
+            >
+              {session.address}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid gap-1.5">
+        <Label>Transaction hash / TxID</Label>
+        <Input value={txHash} onChange={(e) => setTxHash(e.target.value)} placeholder="Paste it here after sending" className="font-mono text-xs" />
+        <p className="text-xs text-muted-foreground">We check it directly on the blockchain — the amount credited is whatever actually arrived.</p>
+      </div>
+
+      <div className="flex gap-2">
+        <Button className="gradient-brand" disabled={!txHash.trim() || submitM.isPending} onClick={() => submitM.mutate()}>
+          {submitM.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Verify &amp; credit
+        </Button>
+        <Button variant="outline" onClick={() => { setSession(null); setTxHash(""); }}>Cancel</Button>
+      </div>
     </div>
   );
 }
