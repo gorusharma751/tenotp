@@ -182,10 +182,19 @@ function dedupeCountries(rows: CountryRow[]): CountryRow[] {
   return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Inline search fires a webhook per keystroke, so refetching ~1000 rows
+// each time would be both slow and pointless — the catalog changes on a
+// sync schedule, not per second. Cached briefly in memory instead.
+let countryCache: { at: number; rows: CountryRow[] } | null = null;
+const COUNTRY_CACHE_MS = 60_000;
+
 export async function loadCountries(userId: string, roles: string[]): Promise<CountryRow[]> {
+  if (countryCache && Date.now() - countryCache.at < COUNTRY_CACHE_MS) return countryCache.rows;
   // Countries come straight from the live catalog — same source the
   // website's Buy Number page uses.
-  return dedupeCountries(await callSelfApi<CountryRow[]>(userId, roles, "GET", "/api/catalog/countries"));
+  const rows = dedupeCountries(await callSelfApi<CountryRow[]>(userId, roles, "GET", "/api/catalog/countries"));
+  countryCache = { at: Date.now(), rows };
+  return rows;
 }
 
 async function startBuyFlow(chatId: number, userId: string, roles: string[]) {
@@ -704,26 +713,34 @@ export async function handleInlineQuery(inlineQueryId: string, from: TelegramPro
 
   try {
     const countries = await loadCountries(user._id, user.roles);
-    const words = q.split(/\s+/).filter(Boolean);
-    // Does the query START with a country we know? If so the rest is a
-    // service search within it.
-    const countryHit = words.length > 1
+    // If this chat already has a country selected, the whole query is a
+    // service search within it — no need to retype the country name.
+    // Otherwise "<country> <something>" also works, and a bare query
+    // searches countries.
+    const session = await getSession(String(from.id));
+    const sessionCountry = session.data.country as CountryRow | undefined;
+    const prefixHit = q.includes(" ")
       ? countries.find((c) => q.toLowerCase().startsWith(c.name.toLowerCase() + " "))
       : undefined;
+    const country = prefixHit ?? sessionCountry;
+    const rest = prefixHit ? q.slice(prefixHit.name.length).trim() : q;
 
-    if (countryHit) {
-      const rest = q.slice(countryHit.name.length).trim();
-      const services = await callSelfApi<ServiceRow[]>(user._id, user.roles, "POST", "/api/otp/services", { countryName: countryHit.name, q: rest });
+    if (country) {
+      const services = await callSelfApi<ServiceRow[]>(user._id, user.roles, "POST", "/api/otp/services", { countryName: country.name, q: rest });
       for (const s of rank(services, rest.toLowerCase(), (r) => r.name).slice(0, 20)) {
         results.push({
           type: "article",
           id: `s_${s.externalId}_${s.providerId}`.slice(0, 60),
           title: `${s.name} — ₹${s.price}`,
-          description: `${countryHit.flag} ${countryHit.name} · ${s.stock} left · ${s.serverLabel}`,
-          input_message_content: { message_text: `/pick ${countryHit.code} ${s.providerId} ${s.externalId}` },
+          description: `${country.flag} ${country.name} · ${s.stock} left · ${s.serverLabel}`,
+          input_message_content: { message_text: `/pick ${country.code} ${s.providerId} ${s.externalId}` },
         });
       }
-    } else {
+    }
+    // Countries either when nothing is selected yet, or as a fallback when
+    // the service search came back empty — better to offer somewhere to go
+    // than an empty dropdown.
+    if (!results.length) {
       for (const c of rank(countries, q.toLowerCase(), (x) => x.name).slice(0, 20)) {
         results.push({
           type: "article",
@@ -738,6 +755,18 @@ export async function handleInlineQuery(inlineQueryId: string, from: TelegramPro
     console.error("[inline] failed:", err instanceof Error ? err.message : err);
   }
 
+  // An empty answer renders as no dropdown at all, which is
+  // indistinguishable from "inline is broken". Always hand back something
+  // actionable so the box never just sits there silently.
+  if (!results.length) {
+    results.push({
+      type: "article",
+      id: "empty",
+      title: q ? `No match for "${q}"` : "Type a country name…",
+      description: "e.g. india · usa · russia — or open the bot and tap Buy Number",
+      input_message_content: { message_text: "/buy" },
+    });
+  }
   await answerInlineQuery(inlineQueryId, results);
 }
 
