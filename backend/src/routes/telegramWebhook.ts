@@ -4,13 +4,14 @@
 // lib/telegramBotFlow.ts. This file is just the HTTP entrypoint + the
 // Telegram-came-from-Telegram signature check.
 import { Router } from "express";
-import { handleTextMessage, handleCallback } from "../lib/telegramBotFlow.ts";
+import { handleTextMessage, handleCallback, handleInlineQuery } from "../lib/telegramBotFlow.ts";
 
 export const telegramWebhookRouter = Router();
 
 type TelegramUpdate = {
   message?: { chat: { id: number }; from?: { id: number; first_name?: string; last_name?: string; username?: string }; text?: string };
   callback_query?: { id: string; from: { id: number; first_name?: string; last_name?: string; username?: string }; message?: { chat: { id: number } }; data?: string };
+  inline_query?: { id: string; from: { id: number; first_name?: string; last_name?: string; username?: string }; query: string };
 };
 
 telegramWebhookRouter.post("/webhook", async (req, res) => {
@@ -26,6 +27,12 @@ telegramWebhookRouter.post("/webhook", async (req, res) => {
 
   try {
     const update: TelegramUpdate = req.body ?? {};
+
+    if (update.inline_query) {
+      const iq = update.inline_query;
+      await handleInlineQuery(iq.id, iq.from, iq.query ?? "");
+      return;
+    }
 
     if (update.callback_query) {
       const cq = update.callback_query;

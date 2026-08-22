@@ -10,7 +10,7 @@
 // Every reply ends with the buttons for whatever can sensibly happen next,
 // so the flow never dead-ends on a message with nothing to tap.
 import { getCollection } from "./mongo.ts";
-import { sendMessage, sendPhotoOrLink, answerCallbackQuery, mainReplyKeyboard, type InlineKeyboard, type InlineButton } from "./telegramBot.ts";
+import { sendMessage, sendPhotoOrLink, answerCallbackQuery, answerInlineQuery, mainReplyKeyboard, type InlineKeyboard, type InlineButton, type InlineResult } from "./telegramBot.ts";
 import { callSelfApi } from "./telegramSelfApi.ts";
 import { findOrCreateTelegramUser, linkTelegramToAccount, type TelegramProfile } from "./auth/telegramAccount.ts";
 import { handleManualText, handleManualCallback, showManualHome } from "./telegramManualFlow.ts";
@@ -149,10 +149,29 @@ function pageRow(tag: string, page: number, total: number): InlineButton[] {
   return row;
 }
 
-async function startBuyFlow(chatId: number, userId: string, roles: string[]) {
+/** The catalog carries one row per country PER UPSTREAM SERVER, so "India"
+ * legitimately appears ~5 times (gr_22, ss_22, sb_22, ti_80, fs_india) and
+ * the picker looked broken because of it. Collapse to one entry per name,
+ * keeping the cheapest — /api/otp/services takes a country NAME and already
+ * aggregates every server behind it, so nothing is lost by picking one code. */
+function dedupeCountries(rows: CountryRow[]): CountryRow[] {
+  const byName = new Map<string, CountryRow>();
+  for (const c of rows) {
+    const key = c.name.trim().toLowerCase();
+    const seen = byName.get(key);
+    if (!seen || Number(c.priceFrom) < Number(seen.priceFrom)) byName.set(key, c);
+  }
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function loadCountries(userId: string, roles: string[]): Promise<CountryRow[]> {
   // Countries come straight from the live catalog — same source the
   // website's Buy Number page uses.
-  const countries = await callSelfApi<CountryRow[]>(userId, roles, "GET", "/api/catalog/countries");
+  return dedupeCountries(await callSelfApi<CountryRow[]>(userId, roles, "GET", "/api/catalog/countries"));
+}
+
+async function startBuyFlow(chatId: number, userId: string, roles: string[]) {
+  const countries = await loadCountries(userId, roles);
   await setSession(String(chatId), "buy_country", { countries, q: "" });
   await showCountryPage(chatId, 0);
 }
@@ -573,6 +592,29 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
     return;
   }
   if (cmd === "/buy" || cmd === "/search") { await startBuyFlow(chatId, user._id, roles); return; }
+  // Both of these arrive from picking an inline ("@bot …") result, not
+  // from anyone typing them by hand.
+  if (cmd === "/country" && parts[1]) {
+    const countries = await loadCountries(user._id, roles);
+    const country = countries.find((c) => c.code === parts[1]);
+    if (!country) { await startBuyFlow(chatId, user._id, roles); return; }
+    await setSession(String(chatId), "buy_country", { countries, q: "" });
+    await loadServices(chatId, user._id, roles, country);
+    return;
+  }
+  if (cmd === "/pick" && parts.length >= 4) {
+    const [, countryCode, providerId, externalId] = parts;
+    const countries = await loadCountries(user._id, roles);
+    const country = countries.find((c) => c.code === countryCode);
+    const services = country
+      ? await callSelfApi<ServiceRow[]>(user._id, roles, "POST", "/api/otp/services", { countryName: country.name, q: "" })
+      : [];
+    const idx = services.findIndex((s) => s.externalId === externalId && s.providerId === providerId);
+    if (!country || idx < 0) { await startBuyFlow(chatId, user._id, roles); return; }
+    await setSession(String(chatId), "buy_service", { country, services, q: "", page: 0 });
+    await handleServicePick(chatId, user._id, roles, idx);
+    return;
+  }
   if (cmd === "/deposit") { await startDepositFlow(chatId); return; }
   if (cmd === "/balance") { await showBalance(chatId, user._id, roles); return; }
   if (cmd === "/orders") { await showOrders(chatId, user._id, roles); return; }
@@ -599,6 +641,55 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
   }
 
   await sendMessage(chatId, "🤔 Not sure what you mean — use the buttons below, or /help.", { keyboard: kb(NAV_HOME) });
+}
+
+/** Live "@bot <query>" search. Typing a country name lists countries;
+ * typing "<country> <service>" narrows to that country's services, so the
+ * whole pick can happen from the text box as you type rather than through
+ * a series of button screens. Choosing a result sends a normal message
+ * back into the chat, which the usual flow then picks up. */
+export async function handleInlineQuery(inlineQueryId: string, from: TelegramProfile, query: string) {
+  const user = await findOrCreateTelegramUser(from);
+  const q = query.trim();
+  const results: InlineResult[] = [];
+
+  try {
+    const countries = await loadCountries(user._id, user.roles);
+    const words = q.split(/\s+/).filter(Boolean);
+    // Does the query START with a country we know? If so the rest is a
+    // service search within it.
+    const countryHit = words.length > 1
+      ? countries.find((c) => q.toLowerCase().startsWith(c.name.toLowerCase() + " "))
+      : undefined;
+
+    if (countryHit) {
+      const rest = q.slice(countryHit.name.length).trim();
+      const services = await callSelfApi<ServiceRow[]>(user._id, user.roles, "POST", "/api/otp/services", { countryName: countryHit.name, q: rest });
+      for (const s of rank(services, rest.toLowerCase(), (r) => r.name).slice(0, 20)) {
+        results.push({
+          type: "article",
+          id: `s_${s.externalId}_${s.providerId}`.slice(0, 60),
+          title: `${s.name} — ₹${s.price}`,
+          description: `${countryHit.flag} ${countryHit.name} · ${s.stock} left · ${s.serverLabel}`,
+          input_message_content: { message_text: `/pick ${countryHit.code} ${s.providerId} ${s.externalId}` },
+        });
+      }
+    } else {
+      for (const c of rank(countries, q.toLowerCase(), (x) => x.name).slice(0, 20)) {
+        results.push({
+          type: "article",
+          id: `c_${c.code}`,
+          title: `${c.flag} ${c.name}`,
+          description: `from ₹${c.priceFrom} — tap, then type a service name`,
+          input_message_content: { message_text: `/country ${c.code}` },
+        });
+      }
+    }
+  } catch (err) {
+    console.error("[inline] failed:", err instanceof Error ? err.message : err);
+  }
+
+  await answerInlineQuery(inlineQueryId, results);
 }
 
 export async function handleCallback(chatId: number, callbackQueryId: string, from: TelegramProfile, data: string) {

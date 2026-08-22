@@ -122,5 +122,22 @@ export async function setMyCommands(commands: Array<{ command: string; descripti
 }
 
 export async function setWebhook(url: string, secretToken: string) {
-  return callTelegramApi("setWebhook", { url, secret_token: secretToken, allowed_updates: ["message", "callback_query"] });
+  return callTelegramApi("setWebhook", { url, secret_token: secretToken, allowed_updates: ["message", "callback_query", "inline_query"] });
+}
+
+export type InlineResult = {
+  type: "article";
+  id: string;
+  title: string;
+  description?: string;
+  input_message_content: { message_text: string };
+  reply_markup?: InlineKeyboard;
+};
+
+/** Answers a live "@bot <query>" search — results appear above the keyboard
+ * as the user types, which is what makes picking a country/service feel
+ * instant instead of a back-and-forth. cache_time is low so a changing
+ * catalog isn't served stale. */
+export async function answerInlineQuery(inlineQueryId: string, results: InlineResult[]) {
+  return callTelegramApi("answerInlineQuery", { inline_query_id: inlineQueryId, results, cache_time: 10, is_personal: true });
 }
