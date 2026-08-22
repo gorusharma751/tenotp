@@ -1,9 +1,14 @@
-// Full bot conversation engine — main menu buttons, buy-number flow
-// (country search -> service search -> confirm -> buy), deposit (QR ->
-// UTR), balance, orders, and referral info. Every money/provider-touching
-// action calls this SAME backend's own REST API (see telegramSelfApi.ts)
-// instead of re-implementing pricing/purchase/payment logic a second time
-// — same account, same wallet, same rules as the website.
+// Full bot conversation engine — everything the website does, driven by
+// buttons and commands inside the chat ("bar bar mini app nahi dena,
+// command ka khel hona chahiye"): buy a number, search services, deposit
+// via BharatPe QR with auto-confirmation, check balance/orders, and
+// referrals. Every money/provider-touching action calls this SAME backend's
+// own REST API (see telegramSelfApi.ts) instead of re-implementing pricing
+// / purchase / payment logic — same account, same wallet, same rules as the
+// website, nothing to drift.
+//
+// Every reply ends with the buttons for whatever can sensibly happen next,
+// so the flow never dead-ends on a message with nothing to tap.
 import { getCollection } from "./mongo.ts";
 import { sendMessage, sendPhotoOrLink, answerCallbackQuery, mainReplyKeyboard, type InlineKeyboard, type InlineButton } from "./telegramBot.ts";
 import { callSelfApi } from "./telegramSelfApi.ts";
@@ -28,11 +33,12 @@ async function clearSession(chatId: string) {
   await setSession(chatId, "menu", {});
 }
 
-// ---- Main menu ----
-// Persistent buttons under the message box (see mainReplyKeyboard) rather
-// than inline ones attached to a single message — they stay put for the
-// whole chat instead of scrolling away. Tapping one just sends its label
-// as text, which BUTTON_COMMANDS maps back to the matching command.
+// ---- Shared next-step button rows ----
+const NAV_HOME: InlineButton[] = [{ text: "🏠 Menu", callback_data: "m:menu" }];
+const kb = (...rows: InlineButton[][]): InlineKeyboard => ({ inline_keyboard: rows });
+
+// Persistent panel under the message box (see mainReplyKeyboard) — taps
+// arrive as plain text, mapped back to commands here.
 const BUTTON_COMMANDS: Record<string, string> = {
   "🛒 buy number": "/buy",
   "🔍 search service": "/search",
@@ -47,7 +53,7 @@ async function sendMenu(chatId: number, greeting?: string) {
   await sendMessage(chatId, greeting ?? "What would you like to do?", { replyKeyboard: mainReplyKeyboard() });
 }
 
-// ---- Buy flow: country search -> service search -> confirm -> buy ----
+// ---- Buy flow ----
 interface CountryRow { code: string; name: string; flag: string; numbersAvailable: number; priceFrom: number }
 interface ServiceRow {
   id: string; externalId: string; name: string; icon: string; category: string; price: number; stock: number;
@@ -56,14 +62,16 @@ interface ServiceRow {
 
 async function startBuyFlow(chatId: number) {
   await setSession(String(chatId), "buy_country", {});
-  await sendMessage(chatId, '🌍 Type a country name to search (e.g. "India", "USA")...');
+  await sendMessage(chatId, '🌍 <b>Step 1 of 3</b> — type a country name\n\ne.g. "India", "USA", "Russia"', { keyboard: kb(NAV_HOME) });
 }
 
-/** Moves the flow to "now search a service", shared by the auto-select
- * path and the button-pick path so both behave identically. */
 async function selectCountry(chatId: number, country: CountryRow) {
   await setSession(String(chatId), "buy_service", { country });
-  await sendMessage(chatId, `📍 ${country.flag} ${country.name} selected.\n\nNow type a service name to search (e.g. "WhatsApp", "Telegram")...`);
+  await sendMessage(
+    chatId,
+    `✅ ${country.flag} <b>${country.name}</b> selected.\n\n🔍 <b>Step 2 of 3</b> — type a service name\n\ne.g. "WhatsApp", "Telegram", "Instagram"`,
+    { keyboard: kb([{ text: "🌍 Change country", callback_data: "m:buy" }], NAV_HOME) },
+  );
 }
 
 async function handleCountrySearch(chatId: number, userId: string, roles: string[], text: string) {
@@ -71,21 +79,20 @@ async function handleCountrySearch(chatId: number, userId: string, roles: string
   const q = text.trim().toLowerCase();
   const matches = countries.filter((c) => c.name.toLowerCase().includes(q)).slice(0, 8);
   if (matches.length === 0) {
-    await sendMessage(chatId, "No countries matched that — try again, or /menu to go back.");
+    await sendMessage(chatId, `❌ No country matched "${text}". Type another name.`, { keyboard: kb(NAV_HOME) });
     return;
   }
-  // "jab India likh diya to select hona chahiye" — typing the country's
-  // actual name (or something only one country matches) shouldn't then ask
-  // you to tap it again. Only offer the picker when the search is genuinely
-  // ambiguous.
+  // Typing the country's actual name shouldn't then make you tap it again —
+  // only show the picker when the search is genuinely ambiguous.
   const exact = matches.find((c) => c.name.toLowerCase() === q);
   if (exact || matches.length === 1) {
     await selectCountry(chatId, exact ?? matches[0]);
     return;
   }
   await setSession(String(chatId), "buy_country_pick", { countries: matches });
-  const rows: InlineButton[][] = matches.map((c) => [{ text: `${c.flag} ${c.name} — from ₹${c.priceFrom}`, callback_data: `cty:${c.code}` }]);
-  await sendMessage(chatId, "Pick a country:", { keyboard: { inline_keyboard: rows } });
+  await sendMessage(chatId, `Found ${matches.length} matches — pick one:`, {
+    keyboard: kb(...matches.map((c) => [{ text: `${c.flag} ${c.name} — from ₹${c.priceFrom}`, callback_data: `cty:${c.code}` }]), NAV_HOME),
+  });
 }
 
 async function handleCountryPick(chatId: number, code: string) {
@@ -93,8 +100,7 @@ async function handleCountryPick(chatId: number, code: string) {
   const countries = (session.data.countries as CountryRow[] | undefined) ?? [];
   const country = countries.find((c) => c.code === code);
   if (!country) {
-    await sendMessage(chatId, "That country expired — try /buy again.");
-    await setSession(String(chatId), "buy_country", {});
+    await startBuyFlow(chatId);
     return;
   }
   await selectCountry(chatId, country);
@@ -104,20 +110,21 @@ async function handleServiceSearch(chatId: number, userId: string, roles: string
   const session = await getSession(String(chatId));
   const country = session.data.country as CountryRow | undefined;
   if (!country) {
-    await sendMessage(chatId, "Pick a country first — type /buy to start over.");
+    await startBuyFlow(chatId);
     return;
   }
   const rows = await callSelfApi<ServiceRow[]>(userId, roles, "POST", "/api/otp/services", { countryName: country.name, q: text.trim() });
   if (rows.length === 0) {
-    await sendMessage(chatId, `No matching services found for "${text}" in ${country.name}. Try another name, or /menu to go back.`);
+    await sendMessage(chatId, `❌ No service matched "${text}" in ${country.name}. Try another name.`, {
+      keyboard: kb([{ text: "🌍 Change country", callback_data: "m:buy" }], NAV_HOME),
+    });
     return;
   }
   const top = rows.slice(0, 8);
   await setSession(String(chatId), "buy_service_pick", { country, services: top });
-  const keyboard: InlineKeyboard = {
-    inline_keyboard: top.map((s, i) => [{ text: `${s.name} — ₹${s.price} (${s.stock} left, ${s.serverLabel})`, callback_data: `svc:${i}` }]),
-  };
-  await sendMessage(chatId, `Found ${rows.length} option(s) for "${text}" in ${country.name}:`, { keyboard });
+  await sendMessage(chatId, `🔍 <b>Step 3 of 3</b> — ${rows.length} option(s) for "${text}" in ${country.name}:`, {
+    keyboard: kb(...top.map((s, i) => [{ text: `${s.name} · ₹${s.price} · ${s.stock} left`, callback_data: `svc:${i}` }]), NAV_HOME),
+  });
 }
 
 async function handleServicePick(chatId: number, idx: number) {
@@ -126,17 +133,14 @@ async function handleServicePick(chatId: number, idx: number) {
   const services = (session.data.services as ServiceRow[] | undefined) ?? [];
   const service = services[idx];
   if (!country || !service) {
-    await sendMessage(chatId, "That option expired — try again with /buy.");
+    await startBuyFlow(chatId);
     return;
   }
   await setSession(String(chatId), "buy_confirm", { country, service });
-  const keyboard: InlineKeyboard = {
-    inline_keyboard: [[{ text: "✅ Confirm & buy", callback_data: "buy_confirm" }, { text: "❌ Cancel", callback_data: "buy_cancel" }]],
-  };
   await sendMessage(
     chatId,
-    `<b>${service.name}</b> in ${country.name}\nServer: ${service.serverLabel}\nPrice: ₹${service.price}\nStock: ${service.stock}\n\nConfirm purchase?`,
-    { keyboard },
+    `🧾 <b>Confirm your order</b>\n\nService: <b>${service.name}</b>\nCountry: ${country.flag} ${country.name}\nServer: ${service.serverLabel}\nStock: ${service.stock}\n\n💵 Price: <b>₹${service.price}</b>`,
+    { keyboard: kb([{ text: "✅ Confirm & Buy", callback_data: "buy_confirm" }], [{ text: "🔙 Back", callback_data: "m:buy" }, ...NAV_HOME]) },
   );
 }
 
@@ -145,7 +149,7 @@ async function handleBuyConfirm(chatId: number, userId: string, roles: string[])
   const country = session.data.country as CountryRow | undefined;
   const service = session.data.service as ServiceRow | undefined;
   if (!country || !service) {
-    await sendMessage(chatId, "That order expired — start again with /buy.");
+    await startBuyFlow(chatId);
     return;
   }
   await clearSession(String(chatId));
@@ -156,120 +160,247 @@ async function handleBuyConfirm(chatId: number, userId: string, roles: string[])
     );
     await sendMessage(
       chatId,
-      `✅ <b>Order placed!</b>\n\n${order.service} · ${order.country}\nNumber: <code>${order.number}</code>\nPrice: ₹${order.price}\n\nUse the number to request the OTP, then check /orders in a bit — I'll show it once it arrives.`,
-      { withAppButton: true, appButtonText: "View in app", appPath: "/dashboard/otp-inbox" },
+      `✅ <b>Number ready!</b>\n\n📱 <code>${order.number}</code>\n\n${order.service} · ${order.country}\nPaid: ₹${order.price}\n\nUse this number where you need the OTP, then tap <b>Check OTP</b> below.`,
+      { keyboard: kb([{ text: "🔄 Check OTP", callback_data: `otp:${order.id}` }], [{ text: "🛒 Buy another", callback_data: "m:buy" }, ...NAV_HOME]) },
     );
   } catch (err) {
-    await sendMessage(chatId, `❌ Could not complete the purchase: ${err instanceof Error ? err.message : "unknown error"}`);
+    const msg = err instanceof Error ? err.message : "unknown error";
+    // Out of money is the one failure with an obvious next step — offer it.
+    const lowBalance = /insufficient balance/i.test(msg);
+    await sendMessage(chatId, `❌ ${msg}`, {
+      keyboard: lowBalance
+        ? kb([{ text: "💰 Add funds", callback_data: "m:deposit" }], [{ text: "🛒 Try again", callback_data: "m:buy" }, ...NAV_HOME])
+        : kb([{ text: "🛒 Try again", callback_data: "m:buy" }, ...NAV_HOME]),
+    });
   }
 }
 
-// ---- Deposit flow ----
-async function startDepositFlow(chatId: number) {
-  await setSession(String(chatId), "deposit_amount", {});
-  await sendMessage(chatId, "💰 How much would you like to deposit? (₹10 – ₹200000)\n\nJust type the amount.");
+async function handleCheckOtp(chatId: number, userId: string, roles: string[], orderId: string) {
+  try {
+    const r = await callSelfApi<{ status: string; otp: string | null }>(userId, roles, "POST", "/api/otp/status", { orderId });
+    if (r.otp) {
+      await sendMessage(chatId, `🎉 <b>OTP received!</b>\n\n<code>${r.otp}</code>`, {
+        keyboard: kb([{ text: "🛒 Buy another", callback_data: "m:buy" }, ...NAV_HOME]),
+      });
+      return;
+    }
+    await sendMessage(chatId, `⏳ No OTP yet (status: ${r.status}). Give it a few seconds and check again.`, {
+      keyboard: kb([{ text: "🔄 Check again", callback_data: `otp:${orderId}` }], [{ text: "❌ Cancel order", callback_data: `cancel:${orderId}` }, ...NAV_HOME]),
+    });
+  } catch (err) {
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not check status"}`, { keyboard: kb(NAV_HOME) });
+  }
 }
 
-async function handleDepositAmount(chatId: number, userId: string, roles: string[], text: string) {
-  const amount = Number(text.trim());
+async function handleCancelOrder(chatId: number, userId: string, roles: string[], orderId: string) {
+  try {
+    await callSelfApi(userId, roles, "POST", "/api/otp/cancel", { orderId });
+    await sendMessage(chatId, "✅ Order cancelled and refunded to your wallet.", {
+      keyboard: kb([{ text: "🛒 Buy again", callback_data: "m:buy" }, ...NAV_HOME]),
+    });
+  } catch (err) {
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not cancel"}`, {
+      keyboard: kb([{ text: "🔄 Check OTP", callback_data: `otp:${orderId}` }, ...NAV_HOME]),
+    });
+  }
+}
+
+// ---- Deposit flow (BharatPe QR -> pay -> auto-confirm / UTR) ----
+const AMOUNT_PRESETS: InlineButton[][] = [
+  [{ text: "₹50", callback_data: "dep:50" }, { text: "₹100", callback_data: "dep:100" }, { text: "₹200", callback_data: "dep:200" }],
+  [{ text: "₹500", callback_data: "dep:500" }, { text: "₹1000", callback_data: "dep:1000" }, { text: "₹2000", callback_data: "dep:2000" }],
+];
+
+async function startDepositFlow(chatId: number) {
+  await setSession(String(chatId), "deposit_amount", {});
+  await sendMessage(chatId, "💰 <b>Add funds</b>\n\nPick an amount, or just type any amount (₹10 – ₹200000):", {
+    keyboard: kb(...AMOUNT_PRESETS, NAV_HOME),
+  });
+}
+
+async function createDeposit(chatId: number, userId: string, roles: string[], amount: number) {
   if (!Number.isFinite(amount) || amount < 10 || amount > 200000) {
-    await sendMessage(chatId, "Enter a valid amount between ₹10 and ₹200000.");
+    await sendMessage(chatId, "❌ Enter an amount between ₹10 and ₹200000.", { keyboard: kb(...AMOUNT_PRESETS, NAV_HOME) });
     return;
   }
   try {
+    // provider: "bharatpe" — same gateway the website's deposit page uses,
+    // so auto-verification (findBharatpeCredit) works the same way here.
     const qr = await callSelfApi<{ sessionId: string; orderId: string; amount: number; qrData: string; qrImage: string; upiId: string }>(
-      userId, roles, "POST", "/api/payments/paytm/create-qr", { amount },
+      userId, roles, "POST", "/api/payments/paytm/create-qr", { amount, provider: "bharatpe" },
     );
-    await setSession(String(chatId), "deposit_utr", { sessionId: qr.sessionId, amount: qr.amount });
-    const caption = `💰 Pay <b>₹${qr.amount}</b>${qr.upiId ? ` to <code>${qr.upiId}</code>` : ""}\n\nScan the QR with any UPI app, or use the link below. Once paid, reply here with the UTR / reference number.\n\n${qr.qrData}`;
-    if (qr.qrImage) await sendPhotoOrLink(chatId, qr.qrImage, caption);
-    else await sendMessage(chatId, caption);
+    await setSession(String(chatId), "deposit_wait", { sessionId: qr.sessionId, amount: qr.amount });
+    const caption =
+      `💰 <b>Pay ₹${qr.amount}</b>\n\n` +
+      (qr.upiId ? `UPI ID: <code>${qr.upiId}</code>\n\n` : "") +
+      `Scan the QR with any UPI app (GPay / PhonePe / Paytm), or tap the UPI link:\n${qr.qrData}\n\n` +
+      `After paying, tap <b>I've Paid</b> — it verifies automatically.`;
+    const keyboard = kb(
+      [{ text: "✅ I've Paid", callback_data: "dep:check" }],
+      [{ text: "✍️ Enter UTR instead", callback_data: "dep:utr" }],
+      [{ text: "❌ Cancel", callback_data: "m:menu" }],
+    );
+    if (qr.qrImage) await sendPhotoOrLink(chatId, qr.qrImage, caption, keyboard);
+    else await sendMessage(chatId, caption, { keyboard });
   } catch (err) {
-    await sendMessage(chatId, `Could not start a deposit: ${err instanceof Error ? err.message : "unknown error"}`);
+    await sendMessage(chatId, `❌ Could not start a deposit: ${err instanceof Error ? err.message : "unknown error"}`, { keyboard: kb(NAV_HOME) });
     await clearSession(String(chatId));
   }
+}
+
+async function handleDepositCheck(chatId: number, userId: string, roles: string[]) {
+  const session = await getSession(String(chatId));
+  const sessionId = session.data.sessionId as string | undefined;
+  if (!sessionId) {
+    await startDepositFlow(chatId);
+    return;
+  }
+  try {
+    const r = await callSelfApi<{ status: string; credited: boolean; balance: number | null; message: string }>(
+      userId, roles, "POST", "/api/payments/paytm/check-qr", { sessionId },
+    );
+    if (r.credited) {
+      await clearSession(String(chatId));
+      await sendMessage(chatId, `✅ <b>Payment received!</b>\n\n💰 New balance: <b>₹${Number(r.balance ?? 0).toFixed(2)}</b>`, {
+        keyboard: kb([{ text: "🛒 Buy a number", callback_data: "m:buy" }, ...NAV_HOME]),
+      });
+      return;
+    }
+    await sendMessage(chatId, `⏳ ${r.message || "Waiting for payment"}\n\nIf you've already paid, wait a few seconds and check again — or submit the UTR.`, {
+      keyboard: kb([{ text: "🔄 Check again", callback_data: "dep:check" }], [{ text: "✍️ Enter UTR", callback_data: "dep:utr" }, ...NAV_HOME]),
+    });
+  } catch (err) {
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not verify"}`, {
+      keyboard: kb([{ text: "✍️ Enter UTR", callback_data: "dep:utr" }, ...NAV_HOME]),
+    });
+  }
+}
+
+async function promptUtr(chatId: number) {
+  const session = await getSession(String(chatId));
+  if (!session.data.sessionId) {
+    await startDepositFlow(chatId);
+    return;
+  }
+  await setSession(String(chatId), "deposit_utr", session.data);
+  await sendMessage(chatId, "✍️ Type the <b>UTR / reference number</b> from your payment app:", { keyboard: kb(NAV_HOME) });
 }
 
 async function handleUtrSubmit(chatId: number, userId: string, roles: string[], text: string) {
   const session = await getSession(String(chatId));
   const sessionId = session.data.sessionId as string | undefined;
   if (!sessionId) {
-    await sendMessage(chatId, "Start a deposit first with /deposit.");
+    await startDepositFlow(chatId);
     return;
   }
   const utr = text.trim();
   if (utr.length < 6) {
-    await sendMessage(chatId, "That doesn't look like a valid UTR — enter the full reference number.");
+    await sendMessage(chatId, "❌ That doesn't look like a valid UTR — enter the full reference number.", { keyboard: kb(NAV_HOME) });
     return;
   }
-  await clearSession(String(chatId));
   try {
     const result = await callSelfApi<{ credited: boolean; pending: boolean; balance: number }>(
       userId, roles, "POST", "/api/payments/paytm/submit-utr", { sessionId, utr },
     );
-    if (result.credited) await sendMessage(chatId, `✅ Deposit confirmed! New balance: ₹${result.balance.toFixed(2)}`);
-    else await sendMessage(chatId, "⏳ Submitted — awaiting admin verification. You'll be notified once it's confirmed.");
+    await clearSession(String(chatId));
+    if (result.credited) {
+      await sendMessage(chatId, `✅ <b>Deposit confirmed!</b>\n\n💰 New balance: <b>₹${Number(result.balance).toFixed(2)}</b>`, {
+        keyboard: kb([{ text: "🛒 Buy a number", callback_data: "m:buy" }, ...NAV_HOME]),
+      });
+    } else {
+      await sendMessage(chatId, "⏳ UTR submitted — verification in progress. You'll be notified once it's confirmed (usually within a few minutes).", {
+        keyboard: kb([{ text: "💼 Check balance", callback_data: "m:balance" }, ...NAV_HOME]),
+      });
+    }
   } catch (err) {
-    await sendMessage(chatId, `Could not verify: ${err instanceof Error ? err.message : "unknown error"}`);
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not verify"}`, { keyboard: kb(NAV_HOME) });
   }
 }
 
-// ---- Simple info commands ----
+// ---- Info screens ----
 async function showBalance(chatId: number, userId: string, roles: string[]) {
   const wallet = await callSelfApi<{ balance: number }>(userId, roles, "GET", "/api/wallet/balance");
-  await sendMessage(chatId, `💰 Wallet balance: <b>₹${Number(wallet.balance).toFixed(2)}</b>`, { withAppButton: true, appButtonText: "Add funds", appPath: "/dashboard/deposit" });
+  await sendMessage(chatId, `💼 <b>Wallet balance</b>\n\n₹${Number(wallet.balance).toFixed(2)}`, {
+    keyboard: kb([{ text: "💰 Add funds", callback_data: "m:deposit" }, { text: "🛒 Buy number", callback_data: "m:buy" }], NAV_HOME),
+  });
 }
 
 interface OrderRow { id: string; service: string; country: string; number: string; status: string; otp?: string; price: number }
 async function showOrders(chatId: number, userId: string, roles: string[]) {
   const orders = await callSelfApi<OrderRow[]>(userId, roles, "GET", "/api/otp/my-orders");
   if (orders.length === 0) {
-    await sendMessage(chatId, "No orders yet.", { withAppButton: true, appButtonText: "Buy a number", appPath: "/dashboard/buy-number" });
+    await sendMessage(chatId, "📦 No orders yet.", { keyboard: kb([{ text: "🛒 Buy your first number", callback_data: "m:buy" }], NAV_HOME) });
     return;
   }
-  const lines = orders.slice(0, 5).map((o) => `• ${o.service} (${o.country}) — <b>${o.status}</b>${o.otp ? ` — OTP: <code>${o.otp}</code>` : ""}`);
-  await sendMessage(chatId, `📦 <b>Your recent orders</b>\n\n${lines.join("\n")}`, { withAppButton: true, appButtonText: "View all", appPath: "/dashboard/orders" });
+  const recent = orders.slice(0, 5);
+  const lines = recent.map((o) => `• <b>${o.service}</b> (${o.country})\n  <code>${o.number}</code> — ${o.status}${o.otp ? ` — OTP: <code>${o.otp}</code>` : ""}`);
+  // Any order still waiting gets its own re-check button, so a pending OTP
+  // is always one tap away rather than needing the app.
+  const pending = recent.filter((o) => !o.otp && o.status === "pending").slice(0, 3);
+  await sendMessage(chatId, `📦 <b>Recent orders</b>\n\n${lines.join("\n")}`, {
+    keyboard: kb(...pending.map((o) => [{ text: `🔄 Check OTP — ${o.service}`, callback_data: `otp:${o.id}` }]), [{ text: "🛒 Buy number", callback_data: "m:buy" }, ...NAV_HOME]),
+  });
 }
 
-interface ReferralRow { referrerId: string; referrerEmail?: string; refereeEmail: string; earned: number; status: string }
+interface ReferralRow { earned: number }
 async function showReferrals(chatId: number, userId: string, roles: string[], user: UserDoc) {
   const rows = await callSelfApi<ReferralRow[]>(userId, roles, "GET", "/api/referrals/");
   const totalEarned = rows.reduce((sum, r) => sum + Number(r.earned || 0), 0);
-  const base = process.env.FRONTEND_URL || "https://tenotp.vercel.app";
-  const link = `${base}/signup?ref=${user.referralCode}`;
+  const botName = process.env.TELEGRAM_BOT_USERNAME || "TenotpNo1_bot";
+  const link = `https://t.me/${botName}?start=${user.referralCode}`;
   await sendMessage(
     chatId,
-    `🎁 <b>Refer & Earn</b>\n\nYour code: <code>${user.referralCode}</code>\nYour link: ${link}\n\nEvery time someone you referred completes a purchase, you earn <b>10%</b> commission — credited straight to your wallet.\n\n👥 Referred so far: ${rows.length}\n💰 Total earned: ₹${totalEarned.toFixed(2)}`,
+    `🎁 <b>Refer &amp; Earn</b>\n\nShare your link — you earn <b>10%</b> of every purchase your referrals make, credited straight to your wallet.\n\n🔗 ${link}\n\nYour code: <code>${user.referralCode}</code>\n\n👥 Referred: <b>${rows.length}</b>\n💰 Earned: <b>₹${totalEarned.toFixed(2)}</b>`,
+    { keyboard: kb([{ text: "💼 Balance", callback_data: "m:balance" }, ...NAV_HOME]) },
   );
 }
 
 const HELP_TEXT = [
-  "<b>TenOTP bot</b>",
+  "<b>TenOTP bot — everything works right here in chat</b>",
   "",
-  "/start, /menu — main menu",
-  "/buy — buy a virtual number",
-  "/search — search for a service",
-  "/deposit — add funds",
-  "/balance — wallet balance",
-  "/orders — recent orders",
-  "/refer — your referral code & earnings",
-  "/help — this message",
+  "🛒 /buy — buy a virtual number",
+  "🔍 /search — search for a service",
+  "💰 /deposit — add funds (UPI QR, auto-confirmed)",
+  "💼 /balance — wallet balance",
+  "📦 /orders — recent orders + check OTP",
+  "🎁 /refer — your referral link &amp; earnings",
+  "🏠 /menu — main menu",
+  "",
+  "Use the buttons under the message box for one-tap access.",
 ].join("\n");
+
+// ---- Referral capture on /start <code> ----
+async function applyReferralCode(user: UserDoc, code: string) {
+  if (!code || user.referredBy) return; // already attributed; never re-attribute
+  const users = await getCollection<UserDoc>("users");
+  const referrer = await users.findOne({ referralCode: code.toUpperCase() });
+  if (!referrer || referrer._id === user._id) return; // unknown code, or self-referral
+  await users.updateOne({ _id: user._id }, { $set: { referredBy: referrer._id } });
+  const referrals = await getCollection("referrals");
+  await referrals.updateOne(
+    { referrerId: referrer._id, referredId: user._id },
+    { $setOnInsert: { _id: crypto.randomUUID(), referrerId: referrer._id, referredId: user._id, percent: 10, totalEarned: 0, createdAt: new Date() } },
+    { upsert: true },
+  );
+}
 
 // ---- Entry points from routes/telegramWebhook.ts ----
 
 export async function handleTextMessage(chatId: number, from: TelegramProfile, text: string) {
   const user = await findOrCreateTelegramUser(from);
   const roles = user.roles;
-  // A tap on one of the persistent buttons arrives as its plain label —
-  // translate it to the equivalent command before parsing.
+  // A tap on one of the persistent buttons arrives as its plain label.
   const asButton = BUTTON_COMMANDS[text.trim().toLowerCase()];
   if (asButton) text = asButton;
-  const cmd = text.trim().split(/\s+/)[0].toLowerCase().split("@")[0];
+  const parts = text.trim().split(/\s+/);
+  const cmd = parts[0].toLowerCase().split("@")[0];
 
   if (cmd === "/start" || cmd === "/menu") {
+    // "/start <code>" is how a referral link arrives — attribute it before
+    // anything else so the referrer earns from this user's first purchase.
+    if (cmd === "/start" && parts[1]) await applyReferralCode(user, parts[1]);
     await clearSession(String(chatId));
-    await sendMenu(chatId, `👋 Welcome to <b>TenOTP</b>, ${from.first_name ?? "there"}!\n\nBuy virtual numbers, get OTPs instantly, deposit funds, and earn referral commissions — all from here.`);
+    await sendMenu(chatId, `👋 Welcome to <b>TenOTP</b>, ${from.first_name ?? "there"}!\n\nBuy virtual numbers, get OTPs, add funds, and earn referral commission — all right here.\n\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`);
     return;
   }
   if (cmd === "/buy" || cmd === "/search") { await startBuyFlow(chatId); return; }
@@ -277,41 +408,48 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
   if (cmd === "/balance") { await showBalance(chatId, user._id, roles); return; }
   if (cmd === "/orders") { await showOrders(chatId, user._id, roles); return; }
   if (cmd === "/refer") { await showReferrals(chatId, user._id, roles, user); return; }
-  if (cmd === "/help") { await sendMessage(chatId, HELP_TEXT, { withAppButton: true }); return; }
+  if (cmd === "/help") { await sendMessage(chatId, HELP_TEXT, { keyboard: kb(NAV_HOME) }); return; }
   if (cmd === "/cancel") { await clearSession(String(chatId)); await sendMenu(chatId, "Cancelled."); return; }
 
-  // Not a command — route by whatever step this chat is currently in.
+  // Not a command — route by whatever step this chat is in.
   const session = await getSession(String(chatId));
   try {
     if (session.step === "buy_country") { await handleCountrySearch(chatId, user._id, roles, text); return; }
     if (session.step === "buy_service") { await handleServiceSearch(chatId, user._id, roles, text); return; }
-    if (session.step === "deposit_amount") { await handleDepositAmount(chatId, user._id, roles, text); return; }
+    if (session.step === "deposit_amount") { await createDeposit(chatId, user._id, roles, Number(text.trim().replace(/[₹,\s]/g, ""))); return; }
     if (session.step === "deposit_utr") { await handleUtrSubmit(chatId, user._id, roles, text); return; }
   } catch (err) {
-    await sendMessage(chatId, `Something went wrong: ${err instanceof Error ? err.message : "unknown error"}`);
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Something went wrong"}`, { keyboard: kb(NAV_HOME) });
     return;
   }
 
-  await sendMessage(chatId, "Not sure what you mean — try /menu, or /help for commands.", { withAppButton: true });
+  await sendMessage(chatId, "🤔 Not sure what you mean — use the buttons below, or /help.", { keyboard: kb(NAV_HOME) });
 }
 
 export async function handleCallback(chatId: number, callbackQueryId: string, from: TelegramProfile, data: string) {
   const user = await findOrCreateTelegramUser(from);
   const roles = user.roles;
+  // Ack immediately so Telegram stops showing the button's loading spinner —
+  // the real work below can take a second (upstream provider calls).
   await answerCallbackQuery(callbackQueryId);
 
   try {
+    if (data === "m:menu") { await clearSession(String(chatId)); await sendMenu(chatId); return; }
     if (data === "m:buy" || data === "m:search") { await startBuyFlow(chatId); return; }
     if (data === "m:deposit") { await startDepositFlow(chatId); return; }
     if (data === "m:balance") { await showBalance(chatId, user._id, roles); return; }
     if (data === "m:orders") { await showOrders(chatId, user._id, roles); return; }
     if (data === "m:refer") { await showReferrals(chatId, user._id, roles, user); return; }
-    if (data === "m:help") { await sendMessage(chatId, HELP_TEXT, { withAppButton: true }); return; }
+    if (data === "m:help") { await sendMessage(chatId, HELP_TEXT, { keyboard: kb(NAV_HOME) }); return; }
     if (data.startsWith("cty:")) { await handleCountryPick(chatId, data.slice(4)); return; }
     if (data.startsWith("svc:")) { await handleServicePick(chatId, Number(data.slice(4))); return; }
     if (data === "buy_confirm") { await handleBuyConfirm(chatId, user._id, roles); return; }
-    if (data === "buy_cancel") { await clearSession(String(chatId)); await sendMenu(chatId, "Cancelled."); return; }
+    if (data.startsWith("otp:")) { await handleCheckOtp(chatId, user._id, roles, data.slice(4)); return; }
+    if (data.startsWith("cancel:")) { await handleCancelOrder(chatId, user._id, roles, data.slice(7)); return; }
+    if (data === "dep:check") { await handleDepositCheck(chatId, user._id, roles); return; }
+    if (data === "dep:utr") { await promptUtr(chatId); return; }
+    if (data.startsWith("dep:")) { await createDeposit(chatId, user._id, roles, Number(data.slice(4))); return; }
   } catch (err) {
-    await sendMessage(chatId, `Something went wrong: ${err instanceof Error ? err.message : "unknown error"}`);
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Something went wrong"}`, { keyboard: kb(NAV_HOME) });
   }
 }

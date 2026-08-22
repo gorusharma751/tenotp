@@ -68,6 +68,7 @@ import AdminManualProviderRequests from "@/routes/admin/manual-provider.requests
 import AdminManualProviderDisputes from "@/routes/admin/manual-provider.disputes";
 import AdminManualProviderSettlements from "@/routes/admin/manual-provider.settlements";
 import AdminManualProviderSettings from "@/routes/admin/manual-provider.settings";
+import AdminTelegram from "@/routes/admin/telegram";
 
 // Ports the monolith's `src/routes/gourav-ankit-adi.tsx` admin shell.
 // The monolith's bare `/gourav-ankit-adi` (login) route is NOT ported here —
@@ -155,4 +156,5 @@ export const adminChildRoutes = [
   p("/gourav-ankit-adi/manual-provider/disputes", AdminManualProviderDisputes),
   p("/gourav-ankit-adi/manual-provider/settlements", AdminManualProviderSettlements),
   p("/gourav-ankit-adi/manual-provider/settings", AdminManualProviderSettings),
+  p("/gourav-ankit-adi/telegram", AdminTelegram),
 ];

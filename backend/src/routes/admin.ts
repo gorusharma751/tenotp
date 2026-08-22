@@ -778,6 +778,49 @@ adminRouter.get("/users", async (_req, res) => {
   }
 });
 
+// Telegram bot usage at a glance — "kitne user bot se hai, kitne number
+// le rahe hai". Bot-created accounts are exactly the ones carrying a
+// telegramId (set by lib/auth/telegramAccount.ts, the single place either
+// Telegram entry point creates an account), so every figure here is
+// derived live from real data rather than a counter that could drift.
+adminRouter.get("/telegram-stats", async (_req, res) => {
+  try {
+    const users = await col<UserDoc>("users");
+    const orders = await col<{ userId: string; status: string; price: number; createdAt: Date }>("orders");
+
+    const telegramUsers = await users.find({ telegramId: { $exists: true } }).toArray();
+    const ids = telegramUsers.map((u) => u._id);
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const [totalOrders, ordersToday, completedOrders] = await Promise.all([
+      ids.length ? orders.countDocuments({ userId: { $in: ids } }) : 0,
+      ids.length ? orders.countDocuments({ userId: { $in: ids }, createdAt: { $gte: dayAgo } }) : 0,
+      ids.length ? orders.find({ userId: { $in: ids }, status: "received" }).toArray() : [],
+    ]);
+    const revenue = completedOrders.reduce((sum, o) => sum + Number(o.price ?? 0), 0);
+
+    res.json({
+      totalUsers: telegramUsers.length,
+      newUsersToday: telegramUsers.filter((u) => u.createdAt >= dayAgo).length,
+      activeUsers: telegramUsers.filter((u) => (u.lastLogin ?? u.createdAt) >= dayAgo).length,
+      totalOrders,
+      ordersToday,
+      completedOrders: completedOrders.length,
+      revenue: Number(revenue.toFixed(2)),
+      walletBalance: Number(telegramUsers.reduce((sum, u) => sum + Number(u.walletBalance ?? 0), 0).toFixed(2)),
+      recentUsers: telegramUsers
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, 10)
+        .map((u) => ({
+          id: u._id, name: u.name, username: u.username ?? null, telegramId: u.telegramId ?? null,
+          wallet: Number(u.walletBalance ?? 0), createdAt: u.createdAt.toISOString(),
+        })),
+    });
+  } catch (err) {
+    fail(res, err);
+  }
+});
+
 adminRouter.get("/users/:id", async (req, res) => {
   try {
     const users = await col<UserDoc>("users");
