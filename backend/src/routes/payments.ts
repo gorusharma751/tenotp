@@ -614,85 +614,99 @@ paymentsRouter.post("/razorpay/admin-config", requireAdmin, async (req, res) => 
 });
 
 /* =========================================================================
- * USDT (crypto) deposits — user sends to our address and submits the tx
- * hash, which is verified on-chain before anything is credited. Money
- * still moves only through approveDeposit, same as every other method.
- * See lib/crypto.ts for the verification rules.
+ * NOWPayments — crypto checkout that behaves like Razorpay: we create an
+ * invoice, they return an address unique to it, and they call our webhook
+ * when it settles. No address bookkeeping, no matching payments to users
+ * by hand. See lib/nowpayments.ts.
  * ========================================================================= */
 
-paymentsRouter.get("/crypto/config", requireAuth, async (_req, res) => {
+paymentsRouter.get("/np/config", requireAuth, async (_req, res) => {
   try {
-    const { loadCryptoConfig, isCryptoReady } = await import("../lib/crypto.ts");
-    const cfg = await loadCryptoConfig();
-    // Public-safe subset only — never the BscScan key.
-    res.json({
-      enabled: isCryptoReady(cfg),
-      rate: cfg.usdt_inr_rate,
-      minUsdt: cfg.min_usdt,
-      networks: [
-        ...(cfg.address_trc20 ? [{ id: "trc20", label: "USDT · TRC20 (Tron)" }] : []),
-        ...(cfg.address_bep20 ? [{ id: "bep20", label: "USDT · BEP20 (BSC)" }] : []),
-      ],
-    });
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : "Could not load crypto config" });
-  }
-});
-
-paymentsRouter.post("/crypto/create", requireAuth, async (req, res) => {
-  try {
-    const amount = Number(req.body?.amount);
-    const network = req.body?.network === "bep20" ? "bep20" : "trc20";
-    const { createCryptoSession } = await import("../lib/crypto.ts");
-    const s = await createCryptoSession(req.auth.userId, amount, network);
-    res.json({
-      sessionId: s._id, network: s.network, address: s.address,
-      expectedUsdt: s.expectedUsdt, inrAmount: s.inrAmount, rate: s.rate,
-      expiresAt: s.expiresAt.toISOString(),
-    });
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : "Could not start deposit" });
-  }
-});
-
-paymentsRouter.post("/crypto/submit", requireAuth, async (req, res) => {
-  try {
-    const sessionId = String(req.body?.sessionId ?? "");
-    const txHash = String(req.body?.txHash ?? "");
-    const { verifyAndCreditCrypto } = await import("../lib/crypto.ts");
-    const out = await verifyAndCreditCrypto(sessionId, req.auth.userId, txHash);
-    res.json(out);
-  } catch (err) {
-    res.status(400).json({ error: err instanceof Error ? err.message : "Could not verify" });
-  }
-});
-
-paymentsRouter.get("/crypto/admin-config", requireAdmin, async (_req, res) => {
-  try {
-    const { loadCryptoConfig } = await import("../lib/crypto.ts");
-    const cfg = await loadCryptoConfig();
-    res.json({ ...cfg, bscscan_api_key: cfg.bscscan_api_key ? "********" : "" });
+    const { loadNpConfig, isNpReady } = await import("../lib/nowpayments.ts");
+    const cfg = await loadNpConfig();
+    // Public-safe subset — never the API key or IPN secret.
+    res.json({ enabled: isNpReady(cfg), minInr: cfg.min_inr, payCurrency: cfg.pay_currency, rate: cfg.inr_per_usd });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Could not load" });
   }
 });
 
-paymentsRouter.post("/crypto/admin-config", requireAdmin, async (req, res) => {
+paymentsRouter.post("/np/create", requireAuth, async (req, res) => {
   try {
-    const { patchCryptoConfig } = await import("../lib/crypto.ts");
-    const body = req.body ?? {};
+    const amount = Number(req.body?.amount);
+    const { createNpPayment } = await import("../lib/nowpayments.ts");
+    const base = process.env.PUBLIC_API_URL || `${req.protocol}://${req.get("host")}`;
+    const s = await createNpPayment(req.auth.userId, amount, `${base}/api/payments/np/ipn`);
+    res.json({
+      sessionId: s._id, paymentId: s.paymentId, address: s.payAddress, payAmount: s.payAmount,
+      payCurrency: s.payCurrency, inrAmount: s.inrAmount, status: s.status,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not start payment" });
+  }
+});
+
+paymentsRouter.post("/np/refresh", requireAuth, async (req, res) => {
+  try {
+    const { refreshNpSession } = await import("../lib/nowpayments.ts");
+    res.json(await refreshNpSession(String(req.body?.sessionId ?? ""), req.auth.userId));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not refresh" });
+  }
+});
+
+// Public by necessity — NOWPayments calls it, so there's no session. The
+// HMAC signature is what authenticates it; an unsigned or wrongly-signed
+// body is rejected outright rather than trusted.
+paymentsRouter.post("/np/ipn", async (req, res) => {
+  try {
+    const { loadNpConfig, verifyIpnSignature, applyNpUpdate } = await import("../lib/nowpayments.ts");
+    const cfg = await loadNpConfig();
+    const signature = String(req.headers["x-nowpayments-sig"] ?? "");
+    if (!verifyIpnSignature(req.body, signature, cfg.ipn_secret)) {
+      console.error("[np ipn] rejected: bad signature");
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+    const body = req.body as { payment_id?: string | number; payment_status?: string; actually_paid?: number };
+    await applyNpUpdate(String(body.payment_id ?? ""), String(body.payment_status ?? ""), body.actually_paid ?? null);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("[np ipn] failed:", err instanceof Error ? err.message : err);
+    // 500 so NOWPayments retries a transient failure rather than giving up.
+    res.status(500).json({ error: "Could not process" });
+  }
+});
+
+paymentsRouter.get("/np/admin-config", requireAdmin, async (_req, res) => {
+  try {
+    const { loadNpConfig, npStatus } = await import("../lib/nowpayments.ts");
+    const cfg = await loadNpConfig();
+    res.json({
+      ...cfg,
+      api_key: cfg.api_key ? "********" : "",
+      ipn_secret: cfg.ipn_secret ? "********" : "",
+      connection: await npStatus(),
+    });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not load" });
+  }
+});
+
+paymentsRouter.post("/np/admin-config", requireAdmin, async (req, res) => {
+  try {
+    const { patchNpConfig } = await import("../lib/nowpayments.ts");
+    const b = req.body ?? {};
     const patch: Record<string, unknown> = {};
-    if (body.enabled !== undefined) patch.enabled = Boolean(body.enabled);
-    if (body.address_trc20 !== undefined) patch.address_trc20 = String(body.address_trc20).trim();
-    if (body.address_bep20 !== undefined) patch.address_bep20 = String(body.address_bep20).trim();
-    if (body.usdt_inr_rate !== undefined) patch.usdt_inr_rate = Math.max(0, Number(body.usdt_inr_rate));
-    if (body.min_usdt !== undefined) patch.min_usdt = Math.max(0, Number(body.min_usdt));
-    if (body.confirmations_required !== undefined) patch.confirmations_required = Math.max(1, Math.round(Number(body.confirmations_required)));
-    // Masked value means "leave it alone" — otherwise loading the page and
-    // saving would wipe the stored key.
-    if (body.bscscan_api_key !== undefined && body.bscscan_api_key !== "********") patch.bscscan_api_key = String(body.bscscan_api_key).trim();
-    const cfg = await patchCryptoConfig(patch);
-    res.json({ ...cfg, bscscan_api_key: cfg.bscscan_api_key ? "********" : "" });
+    if (b.enabled !== undefined) patch.enabled = Boolean(b.enabled);
+    if (b.inr_per_usd !== undefined) patch.inr_per_usd = Math.max(0, Number(b.inr_per_usd));
+    if (b.min_inr !== undefined) patch.min_inr = Math.max(0, Number(b.min_inr));
+    if (b.pay_currency !== undefined) patch.pay_currency = String(b.pay_currency).trim().toLowerCase();
+    // "********" means the field wasn't edited — keep what's stored rather
+    // than wiping the secret just because the page was saved.
+    if (b.api_key !== undefined && b.api_key !== "********") patch.api_key = String(b.api_key).trim();
+    if (b.ipn_secret !== undefined && b.ipn_secret !== "********") patch.ipn_secret = String(b.ipn_secret).trim();
+    const cfg = await patchNpConfig(patch);
+    res.json({ ...cfg, api_key: cfg.api_key ? "********" : "", ipn_secret: cfg.ipn_secret ? "********" : "" });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : "Could not save" });
   }

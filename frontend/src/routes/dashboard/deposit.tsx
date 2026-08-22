@@ -61,8 +61,8 @@ export default function Deposit() {
   const bpeAutoEnabled = paytmStatus.data?.bharatpeEnabled ?? false;
   const razorpayStatus = useQuery({ queryKey: ["razorpay-config"], queryFn: () => api.get<{ enabled: boolean }>("/api/payments/razorpay/config") });
   const razorpayEnabled = razorpayStatus.data?.enabled ?? false;
-  const cryptoCfg = useQuery({ queryKey: ["crypto-config"], queryFn: () => api.get<CryptoCfg>("/api/payments/crypto/config") });
-  const cryptoEnabled = (cryptoCfg.data?.enabled ?? false) && (cryptoCfg.data?.networks.length ?? 0) > 0;
+  const cryptoCfg = useQuery({ queryKey: ["np-config"], queryFn: () => api.get<CryptoCfg>("/api/payments/np/config") });
+  const cryptoEnabled = cryptoCfg.data?.enabled ?? false;
   const [rzpBusy, setRzpBusy] = useState(false);
   const qc = useQueryClient();
 
@@ -448,64 +448,63 @@ function PaytmQrCard({ amount, setAmount, presets, provider, title, ttlMinutes =
   );
 }
 
-/* ---------------- USDT (crypto) deposit ---------------- */
 
-interface CryptoCfg {
-  enabled: boolean;
-  rate: number;
-  minUsdt: number;
-  networks: Array<{ id: string; label: string }>;
+/* ---------------- Crypto checkout (NOWPayments) ---------------- */
+
+interface CryptoCfg { enabled: boolean; minInr: number; payCurrency: string; rate: number }
+interface NpSession {
+  sessionId: string; paymentId: string; address: string | null; payAmount: number | null;
+  payCurrency: string; inrAmount: number; status: string;
 }
-interface CryptoSession {
-  sessionId: string; network: string; address: string;
-  expectedUsdt: number; inrAmount: number; rate: number; expiresAt: string;
-}
+
+const NP_DONE = ["finished", "confirmed", "paid"];
 
 function CryptoDepositCard({ config }: { config: CryptoCfg }) {
-  const [network, setNetwork] = useState(config.networks[0]?.id ?? "trc20");
-  const [amount, setAmount] = useState(500);
-  const [session, setSession] = useState<CryptoSession | null>(null);
-  const [txHash, setTxHash] = useState("");
+  const [amount, setAmount] = useState(Math.max(config.minInr, 500));
+  const [session, setSession] = useState<NpSession | null>(null);
+  const [status, setStatus] = useState<string>("");
+  const qc = useQueryClient();
 
   const createM = useMutation({
-    mutationFn: () => api.post<CryptoSession>("/api/payments/crypto/create", { amount, network }),
-    onSuccess: (s) => setSession(s),
-    onError: (e: any) => toast.error(e?.message || "Could not start deposit"),
+    mutationFn: () => api.post<NpSession>("/api/payments/np/create", { amount }),
+    onSuccess: (s) => { setSession(s); setStatus(s.status); },
+    onError: (e: any) => toast.error(e?.message || "Could not start payment"),
   });
-  const submitM = useMutation({
-    mutationFn: () => api.post<{ credited: boolean; message: string; balance: number | null }>("/api/payments/crypto/submit", { sessionId: session!.sessionId, txHash }),
-    onSuccess: (r) => {
+
+  const refresh = async (quiet = false) => {
+    if (!session) return;
+    try {
+      const r = await api.post<{ status: string; credited: boolean; balance: number | null }>("/api/payments/np/refresh", { sessionId: session.sessionId });
+      setStatus(r.status);
       if (r.credited) {
-        toast.success(r.message);
-        setSession(null); setTxHash("");
-      } else {
-        // Not an error — the transfer just isn't visible/confirmed yet, so
-        // keep the form as-is so they can retry the same hash.
-        toast.info(r.message);
+        toast.success("Payment received — wallet credited");
+        qc.invalidateQueries({ queryKey: ["wallet"] });
+        setSession(null);
+      } else if (!quiet) {
+        toast.info(`Status: ${r.status.replace("_", " ")}`);
       }
-    },
-    onError: (e: any) => toast.error(e?.message || "Could not verify"),
-  });
+    } catch (e) {
+      if (!quiet) toast.error(e instanceof Error ? e.message : "Could not check");
+    }
+  };
+
+  // The webhook is what normally credits this; polling is only a safety
+  // net for when it doesn't arrive (their retries give up, server asleep).
+  useEffect(() => {
+    if (!session || NP_DONE.includes(status)) return;
+    const t = setInterval(() => refresh(true), 15000);
+    return () => clearInterval(t);
+  }, [session, status]);
 
   if (!session) {
     return (
       <div className="space-y-4">
-        <div>
-          <Label className="mb-1.5 block">Network</Label>
-          <div className="flex flex-wrap gap-2">
-            {config.networks.map((n) => (
-              <Button key={n.id} type="button" size="sm" variant={network === n.id ? "default" : "outline"} className={network === n.id ? "gradient-brand" : ""} onClick={() => setNetwork(n.id)}>
-                {n.label}
-              </Button>
-            ))}
-          </div>
-        </div>
         <AmountBlock amount={amount} setAmount={setAmount} presets={INR_PRESETS} />
         <p className="text-xs text-muted-foreground">
-          1 USDT = ₹{config.rate} · you'll send ≈ <b>{(amount / config.rate).toFixed(2)} USDT</b> · minimum {config.minUsdt} USDT
+          Minimum ₹{config.minInr} · you'll pay in <b>{config.payCurrency.toUpperCase()}</b> · a fresh address is generated for this payment
         </p>
-        <Button className="gradient-brand" disabled={createM.isPending} onClick={() => createM.mutate()}>
-          {createM.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Continue
+        <Button className="gradient-brand" disabled={amount < config.minInr || createM.isPending} onClick={() => createM.mutate()}>
+          {createM.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Pay ₹{amount} in crypto
         </Button>
       </div>
     );
@@ -513,48 +512,49 @@ function CryptoDepositCard({ config }: { config: CryptoCfg }) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-xl border border-warning/40 bg-warning/5 p-3 text-xs">
-        ⚠️ Send <b>only USDT on {session.network.toUpperCase()}</b> to this address. Any other coin or network cannot be recovered.
+      <div className="flex items-center gap-2 text-sm">
+        <Badge variant="outline" className="capitalize">{status.replace("_", " ") || "waiting"}</Badge>
+        <span className="text-muted-foreground text-xs">Credits automatically once the network confirms it.</span>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-4 items-start">
-        <img
-          src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(session.address)}`}
-          alt="Deposit address QR"
-          className="rounded-xl border bg-white p-2 shrink-0"
-          width={200}
-          height={200}
-        />
+        {session.address && (
+          <img
+            src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=8&data=${encodeURIComponent(session.address)}`}
+            alt="Payment address QR"
+            className="rounded-xl border bg-white p-2 shrink-0"
+            width={200}
+            height={200}
+          />
+        )}
         <div className="space-y-2 min-w-0 flex-1">
           <div>
             <Label className="text-xs">Send exactly</Label>
-            <p className="text-2xl font-bold tabular-nums">{session.expectedUsdt} USDT</p>
-            <p className="text-xs text-muted-foreground">= ₹{session.inrAmount.toFixed(2)} at 1 USDT = ₹{session.rate}</p>
+            <p className="text-2xl font-bold tabular-nums">{session.payAmount ?? "—"} {session.payCurrency.toUpperCase()}</p>
+            <p className="text-xs text-muted-foreground">for ₹{session.inrAmount.toFixed(2)}</p>
           </div>
-          <div>
-            <Label className="text-xs">{session.network.toUpperCase()} address</Label>
-            <button
-              type="button"
-              onClick={() => { navigator.clipboard.writeText(session.address); toast.success("Address copied"); }}
-              className="w-full text-left font-mono text-xs break-all rounded-lg border px-2.5 py-2 hover:border-primary/60"
-            >
-              {session.address}
-            </button>
-          </div>
+          {session.address && (
+            <div>
+              <Label className="text-xs">To this address</Label>
+              <button
+                type="button"
+                onClick={() => { navigator.clipboard.writeText(session.address!); toast.success("Address copied"); }}
+                className="w-full text-left font-mono text-xs break-all rounded-lg border px-2.5 py-2 hover:border-primary/60"
+              >
+                {session.address}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="grid gap-1.5">
-        <Label>Transaction hash / TxID</Label>
-        <Input value={txHash} onChange={(e) => setTxHash(e.target.value)} placeholder="Paste it here after sending" className="font-mono text-xs" />
-        <p className="text-xs text-muted-foreground">We check it directly on the blockchain — the amount credited is whatever actually arrived.</p>
+      <div className="rounded-xl border border-warning/40 bg-warning/5 p-3 text-xs">
+        ⚠️ Send the <b>exact amount</b> in <b>{session.payCurrency.toUpperCase()}</b> to this address only. It belongs to this payment alone.
       </div>
 
       <div className="flex gap-2">
-        <Button className="gradient-brand" disabled={!txHash.trim() || submitM.isPending} onClick={() => submitM.mutate()}>
-          {submitM.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Verify &amp; credit
-        </Button>
-        <Button variant="outline" onClick={() => { setSession(null); setTxHash(""); }}>Cancel</Button>
+        <Button variant="outline" onClick={() => refresh(false)}>Check status</Button>
+        <Button variant="outline" onClick={() => { setSession(null); setStatus(""); }}>Cancel</Button>
       </div>
     </div>
   );

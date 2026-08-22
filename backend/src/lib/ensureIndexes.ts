@@ -109,15 +109,6 @@ export async function ensureIndexes(db: Db): Promise<void> {
     { unique: true, partialFilterExpression: { status: "paid", txnId: { $type: "string" } } },
   );
 
-  // crypto (USDT) deposits — the partial unique index is the real
-  // guarantee that one on-chain transfer can never be credited twice,
-  // even if two requests race past the application-level check.
-  await db.collection("crypto_sessions").createIndex({ userId: 1, createdAt: -1 });
-  await db.collection("crypto_sessions").createIndex(
-    { txHash: 1 },
-    { unique: true, partialFilterExpression: { status: "paid", txHash: { $type: "string" } } },
-  );
-
   // rate limiting (service-only collection)
   await db.collection("rate_limits").createIndex({ bucket: 1, key: 1 }, { unique: true });
 

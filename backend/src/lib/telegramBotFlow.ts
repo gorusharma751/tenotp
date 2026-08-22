@@ -391,7 +391,7 @@ const AMOUNT_PRESETS: InlineButton[][] = [
 async function startDepositFlow(chatId: number, userId?: string, roles?: string[]) {
   if (userId) {
     try {
-      const cc = await callSelfApi<{ enabled: boolean; rate: number }>(userId, roles ?? [], "GET", "/api/payments/crypto/config");
+      const cc = await callSelfApi<{ enabled: boolean; rate: number }>(userId, roles ?? [], "GET", "/api/payments/np/config");
       if (cc.enabled) {
         await setSession(String(chatId), "menu", {});
         await sendMessage(chatId, `💰 <b>Add funds</b>\n\nHow would you like to pay?`, {
@@ -415,81 +415,72 @@ async function startUpiDepositFlow(chatId: number) {
   });
 }
 
-// ---- Crypto (USDT) deposit ----
+// ---- Crypto deposit (NOWPayments) ----
+// The gateway issues an address per invoice, so there's no network picker
+// and no transaction hash to paste — it just gets credited when the
+// webhook lands. Polling is only the fallback for a missed webhook.
 async function startCryptoFlow(chatId: number, userId: string, roles: string[]) {
-  const cc = await callSelfApi<{ enabled: boolean; rate: number; minUsdt: number; networks: Array<{ id: string; label: string }> }>(
-    userId, roles, "GET", "/api/payments/crypto/config",
-  );
-  if (!cc.enabled || !cc.networks.length) {
-    await sendMessage(chatId, "₮ Crypto deposits aren't available right now.", { keyboard: kb([{ text: "🇮🇳 Pay via UPI", callback_data: "dep:m:upi" }, ...NAV_HOME]) });
+  const cc = await callSelfApi<{ enabled: boolean; minInr: number; payCurrency: string }>(userId, roles, "GET", "/api/payments/np/config");
+  if (!cc.enabled) {
+    await sendMessage(chatId, "₮ Crypto payments aren't available right now.", { keyboard: kb([{ text: "🇮🇳 Pay via UPI", callback_data: "dep:m:upi" }, ...NAV_HOME]) });
     return;
   }
-  await setSession(String(chatId), "crypto_network", { rate: cc.rate });
+  await setSession(String(chatId), "crypto_amount", { minInr: cc.minInr });
   await sendMessage(
     chatId,
-    `₮ <b>USDT deposit</b>\n\nRate: <b>1 USDT = ₹${cc.rate}</b>\nMinimum: ${cc.minUsdt} USDT\n\nPick the network you'll send on — <b>this must match</b> the network you send from, or the funds are lost:`,
-    { keyboard: kb(...cc.networks.map((n) => [{ text: n.label, callback_data: `cn:${n.id}` }]), NAV_HOME) },
+    `₮ <b>Pay with crypto</b>\n\nYou'll pay in <b>${cc.payCurrency.toUpperCase()}</b>. Minimum ₹${cc.minInr}.\n\nHow much do you want to add? Pick one, or type any amount:`,
+    { keyboard: kb(...AMOUNT_PRESETS.map((row) => row.map((b) => ({ ...b, callback_data: b.callback_data!.replace("dep:", "cam:") }))), NAV_HOME) },
   );
-}
-
-async function pickCryptoNetwork(chatId: number, network: string) {
-  const s = await getSession(String(chatId));
-  await setSession(String(chatId), "crypto_amount", { ...s.data, network });
-  await sendMessage(chatId, `Selected <b>${network.toUpperCase()}</b>.\n\nHow much do you want to add? Type the amount in ₹, or pick one:`, {
-    keyboard: kb(...AMOUNT_PRESETS.map((row) => row.map((b) => ({ ...b, callback_data: b.callback_data!.replace("dep:", "cam:") }))), NAV_HOME),
-  });
 }
 
 async function createCryptoDeposit(chatId: number, userId: string, roles: string[], amount: number) {
-  const s = await getSession(String(chatId));
-  const network = String(s.data.network ?? "trc20");
   try {
-    const d = await callSelfApi<{ sessionId: string; address: string; expectedUsdt: number; inrAmount: number; rate: number; network: string }>(
-      userId, roles, "POST", "/api/payments/crypto/create", { amount, network },
+    const d = await callSelfApi<{ sessionId: string; address: string | null; payAmount: number | null; payCurrency: string; inrAmount: number }>(
+      userId, roles, "POST", "/api/payments/np/create", { amount },
     );
-    await setSession(String(chatId), "crypto_tx", { sessionId: d.sessionId });
+    await setSession(String(chatId), "crypto_wait", { sessionId: d.sessionId });
+    const coin = d.payCurrency.toUpperCase();
     const caption =
-      `₮ <b>Send exactly ${d.expectedUsdt} USDT</b>\n\n` +
-      `Network: <b>${d.network.toUpperCase()}</b>\n` +
-      `Address:\n<code>${d.address}</code>\n\n` +
-      `You'll get ₹${d.inrAmount.toFixed(2)} at 1 USDT = ₹${d.rate}\n\n` +
-      `⚠️ Send only <b>USDT on ${d.network.toUpperCase()}</b> to this address. Any other coin or network is unrecoverable.\n\n` +
-      `After sending, tap below and paste the transaction hash — it's checked on-chain and credited automatically.`;
-    const qr = `https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=16&data=${encodeURIComponent(d.address)}`;
-    await sendPhotoOrLink(chatId, qr, caption, kb([{ text: "✍️ I've sent — paste tx hash", callback_data: "cx:tx" }], [{ text: "❌ Cancel", callback_data: "m:menu" }]));
+      `₮ <b>Send ${d.payAmount ?? "—"} ${coin}</b>\n\n` +
+      (d.address ? `Address:\n<code>${d.address}</code>\n\n` : "") +
+      `That's ₹${d.inrAmount.toFixed(2)} for your wallet.\n\n` +
+      `⚠️ Send <b>only ${coin}</b>, and the <b>exact amount</b> — this address belongs to this payment alone.\n\n` +
+      `Your wallet credits automatically once the network confirms it.`;
+    const keyboard = kb([{ text: "🔄 Check status", callback_data: "cx:check" }], [{ text: "❌ Cancel", callback_data: "m:menu" }]);
+    if (d.address) {
+      const qr = `https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=16&data=${encodeURIComponent(d.address)}`;
+      await sendPhotoOrLink(chatId, qr, caption, keyboard);
+    } else {
+      await sendMessage(chatId, caption, { keyboard });
+    }
   } catch (err) {
-    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not start deposit"}`, { keyboard: kb(NAV_HOME) });
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not start payment"}`, { keyboard: kb(NAV_HOME) });
   }
 }
 
-async function promptTxHash(chatId: number) {
-  const s = await getSession(String(chatId));
-  if (!s.data.sessionId) { await sendMessage(chatId, "Start a deposit first.", { keyboard: kb([{ text: "₮ USDT deposit", callback_data: "dep:m:crypto" }, ...NAV_HOME]) }); return; }
-  await setSession(String(chatId), "crypto_tx", s.data);
-  await sendMessage(chatId, "✍️ Paste the <b>transaction hash / TxID</b> from your wallet or exchange:", { keyboard: kb(NAV_HOME) });
-}
-
-async function submitTxHash(chatId: number, userId: string, roles: string[], txHash: string) {
+async function checkCryptoStatus(chatId: number, userId: string, roles: string[]) {
   const s = await getSession(String(chatId));
   const sessionId = s.data.sessionId as string | undefined;
-  if (!sessionId) { await sendMessage(chatId, "Start a deposit first.", { keyboard: kb([{ text: "₮ USDT deposit", callback_data: "dep:m:crypto" }, ...NAV_HOME]) }); return; }
-  await sendMessage(chatId, "⏳ Checking the blockchain…");
+  if (!sessionId) {
+    await sendMessage(chatId, "Start a payment first.", { keyboard: kb([{ text: "₮ Pay with crypto", callback_data: "dep:m:crypto" }, ...NAV_HOME]) });
+    return;
+  }
   try {
-    const r = await callSelfApi<{ credited: boolean; message: string; balance: number | null }>(
-      userId, roles, "POST", "/api/payments/crypto/submit", { sessionId, txHash },
+    const r = await callSelfApi<{ status: string; credited: boolean; balance: number | null }>(
+      userId, roles, "POST", "/api/payments/np/refresh", { sessionId },
     );
     if (r.credited) {
       await clearSession(String(chatId));
-      await sendMessage(chatId, `✅ <b>${r.message}</b>${r.balance !== null ? `\n\n💰 New balance: ₹${Number(r.balance).toFixed(2)}` : ""}`, {
+      await sendMessage(chatId, `✅ <b>Payment received!</b>${r.balance !== null ? `\n\n💰 New balance: ₹${Number(r.balance).toFixed(2)}` : ""}`, {
         keyboard: kb([{ text: "🛒 Buy a number", callback_data: "m:buy" }, ...NAV_HOME]),
       });
       return;
     }
-    await sendMessage(chatId, `⏳ ${r.message}`, { keyboard: kb([{ text: "🔄 Check again", callback_data: "cx:tx" }, ...NAV_HOME]) });
-  } catch (err) {
-    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not verify"}`, {
-      keyboard: kb([{ text: "🔄 Try another hash", callback_data: "cx:tx" }, ...NAV_HOME]),
+    await sendMessage(chatId, `⏳ Status: <b>${r.status.replace("_", " ")}</b>\n\nIt credits on its own once confirmed — no need to keep checking.`, {
+      keyboard: kb([{ text: "🔄 Check again", callback_data: "cx:check" }, ...NAV_HOME]),
     });
+  } catch (err) {
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not check"}`, { keyboard: kb(NAV_HOME) });
   }
 }
 
@@ -792,7 +783,6 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
     if (session.step === "deposit_amount") { await createDeposit(chatId, user._id, roles, Number(text.trim().replace(/[₹,\s]/g, ""))); return; }
     if (session.step === "deposit_utr") { await handleUtrSubmit(chatId, user._id, roles, text); return; }
     if (session.step === "crypto_amount") { await createCryptoDeposit(chatId, user._id, roles, Number(text.trim().replace(/[₹,\s]/g, ""))); return; }
-    if (session.step === "crypto_tx") { await submitTxHash(chatId, user._id, roles, text); return; }
     if (session.step === "link_email") { await handleLinkEmail(chatId, text); return; }
     if (session.step === "link_password") { await handleLinkPassword(chatId, String(from.id), text); return; }
   } catch (err) {
@@ -918,9 +908,8 @@ export async function handleCallback(chatId: number, callbackQueryId: string, fr
     if (data.startsWith("cancel:")) { await handleCancelOrder(chatId, user._id, roles, data.slice(7)); return; }
     if (data === "dep:m:upi") { await startUpiDepositFlow(chatId); return; }
     if (data === "dep:m:crypto") { await startCryptoFlow(chatId, user._id, roles); return; }
-    if (data.startsWith("cn:")) { await pickCryptoNetwork(chatId, data.slice(3)); return; }
     if (data.startsWith("cam:")) { await createCryptoDeposit(chatId, user._id, roles, Number(data.slice(4))); return; }
-    if (data === "cx:tx") { await promptTxHash(chatId); return; }
+    if (data === "cx:check") { await checkCryptoStatus(chatId, user._id, roles); return; }
     if (data === "dep:check") { await handleDepositCheck(chatId, user._id, roles); return; }
     if (data === "dep:utr") { await promptUtr(chatId); return; }
     if (data.startsWith("dep:")) { await createDeposit(chatId, user._id, roles, Number(data.slice(4))); return; }
