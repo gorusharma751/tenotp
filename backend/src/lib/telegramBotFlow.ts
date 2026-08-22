@@ -63,6 +63,50 @@ async function sendMenu(chatId: number, greeting?: string, withManual = false) {
   await sendMessage(chatId, greeting ?? "What would you like to do?", { replyKeyboard: mainReplyKeyboard({ withManual }) });
 }
 
+/** Shown on /start and /menu. When Manual Provider is available to this
+ * account there are genuinely two sides to be on, so ask once — buyers go
+ * straight to the buying menu (which itself offers both virtual and manual
+ * numbers), sellers get the seller panel. Everyone else skips the question
+ * entirely, since "buyer" is the only thing they can be. */
+async function sendWelcome(chatId: number, user: UserDoc, firstName?: string) {
+  const manual = isManualUnlocked(user);
+  const unlinked = user.email.endsWith("@telegram.local")
+    ? `\n\n🔗 Already have an account on the website? Send /link to use it here (same wallet &amp; orders).`
+    : "";
+  const balance = `\n\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`;
+
+  if (!manual) {
+    await sendMenu(chatId, `👋 Welcome to <b>TenOTP</b>, ${firstName ?? "there"}!${balance}${unlinked}`, false);
+    return;
+  }
+  await sendMessage(
+    chatId,
+    `👋 Welcome to <b>TenOTP</b>, ${firstName ?? "there"}!${balance}${unlinked}\n\nWhich side are you on?`,
+    { keyboard: kb([{ text: "🛍 I'm a Buyer", callback_data: "role:buyer" }], [{ text: "🧑‍💼 I'm a Seller", callback_data: "role:seller" }]) },
+  );
+}
+
+/** The buyer's home — both ways to get a number, side by side, so the
+ * choice is right there rather than buried ("buyer me 2 honge na, manual
+ * aur virtual"). */
+async function sendBuyerMenu(chatId: number, user: UserDoc) {
+  await sendMenu(
+    chatId,
+    `🛍 <b>Buyer</b>\n\n` +
+      `⚡ <b>Virtual Number</b> — instant, automatic, cheapest\n` +
+      `🤝 <b>Manual OTP</b> — a real person's number, for services virtual numbers don't accept\n\n` +
+      `💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`,
+    isManualUnlocked(user),
+  );
+  await sendMessage(chatId, "Pick how you want your number:", {
+    keyboard: kb(
+      [{ text: "⚡ Virtual Number (instant)", callback_data: "m:buy" }],
+      [{ text: "🤝 Manual OTP (real number)", callback_data: "m:manual" }],
+      [{ text: "💰 Deposit", callback_data: "m:deposit" }, { text: "📦 Orders", callback_data: "m:orders" }],
+    ),
+  });
+}
+
 // ---- Buy flow ----
 interface CountryRow { code: string; name: string; flag: string; numbersAvailable: number; priceFrom: number }
 interface ServiceRow {
@@ -454,19 +498,7 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
     // anything else so the referrer earns from this user's first purchase.
     if (cmd === "/start" && parts[1]) await applyReferralCode(user, parts[1]);
     await clearSession(String(chatId));
-    const manual = isManualUnlocked(user);
-    await sendMenu(
-      chatId,
-      `👋 Welcome to <b>TenOTP</b>, ${from.first_name ?? "there"}!\n\n` +
-        `⚡ <b>Temp OTP</b> — instant virtual numbers, automatic\n` +
-        (manual ? `🤝 <b>Manual OTP</b> — real people fulfil it (buy or sell)\n` : "") +
-        `\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}` +
-        // A fresh bot account is separate from any website account until
-        // it's linked — say so, rather than letting them wonder why their
-        // balance/orders look empty here.
-        (user.email.endsWith("@telegram.local") ? `\n\n🔗 Already have an account on the website? Send /link to use it here (same wallet &amp; orders).` : ""),
-      manual,
-    );
+    await sendWelcome(chatId, user, from.first_name);
     return;
   }
   if (cmd === "/manual") {
@@ -520,7 +552,16 @@ export async function handleCallback(chatId: number, callbackQueryId: string, fr
     if ((data === "m:manual" || data.startsWith("mp")) && isManualUnlocked(user)) {
       if (await handleManualCallback(chatId, user._id, roles, data)) return;
     }
-    if (data === "m:menu") { await clearSession(String(chatId)); await sendMenu(chatId, undefined, isManualUnlocked(user)); return; }
+    if (data === "role:buyer") { await clearSession(String(chatId)); await sendBuyerMenu(chatId, user); return; }
+    if (data === "role:seller") {
+      // Guarded like every other Manual Provider entry — a stale button
+      // from before access changed must not get through.
+      if (!isManualUnlocked(user)) { await sendBuyerMenu(chatId, user); return; }
+      await clearSession(String(chatId));
+      await handleManualCallback(chatId, user._id, roles, "mp:seller");
+      return;
+    }
+    if (data === "m:menu") { await clearSession(String(chatId)); await sendWelcome(chatId, user); return; }
     if (data === "m:buy" || data === "m:search") { await startBuyFlow(chatId); return; }
     if (data === "m:deposit") { await startDepositFlow(chatId); return; }
     if (data === "m:balance") { await showBalance(chatId, user._id, roles); return; }
