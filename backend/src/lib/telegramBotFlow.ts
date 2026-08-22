@@ -231,17 +231,22 @@ async function createDeposit(chatId: number, userId: string, roles: string[], am
     );
     await setSession(String(chatId), "deposit_wait", { sessionId: qr.sessionId, amount: qr.amount });
     const caption =
-      `💰 <b>Pay ₹${qr.amount}</b>\n\n` +
-      (qr.upiId ? `UPI ID: <code>${qr.upiId}</code>\n\n` : "") +
-      `Scan the QR with any UPI app (GPay / PhonePe / Paytm), or tap the UPI link:\n${qr.qrData}\n\n` +
-      `After paying, tap <b>I've Paid</b> — it verifies automatically.`;
+      `💰 <b>Pay exactly ₹${qr.amount}</b>\n\n` +
+      `📲 Scan this QR with any UPI app (GPay / PhonePe / Paytm)` +
+      (qr.upiId ? `\n\nOr pay to UPI ID:\n<code>${qr.upiId}</code>` : "") +
+      `\n\n⚠️ Pay the exact amount — it's how the payment is matched to you.\n\n` +
+      `After paying, tap <b>✅ I've Paid</b>.`;
     const keyboard = kb(
       [{ text: "✅ I've Paid", callback_data: "dep:check" }],
       [{ text: "✍️ Enter UTR instead", callback_data: "dep:utr" }],
       [{ text: "❌ Cancel", callback_data: "m:menu" }],
     );
-    if (qr.qrImage) await sendPhotoOrLink(chatId, qr.qrImage, caption, keyboard);
-    else await sendMessage(chatId, caption, { keyboard });
+    // Same fallback the website's deposit page uses: when no merchant QR
+    // image is configured, render the UPI link as a QR instead of leaving
+    // the user with just a link ("payment karte time QR nahi ban ke aa
+    // raha"). Telegram fetches the URL itself for sendPhoto.
+    const qrImage = qr.qrImage || `https://api.qrserver.com/v1/create-qr-code/?size=512x512&margin=16&data=${encodeURIComponent(qr.qrData)}`;
+    await sendPhotoOrLink(chatId, qrImage, caption, keyboard);
   } catch (err) {
     await sendMessage(chatId, `❌ Could not start a deposit: ${err instanceof Error ? err.message : "unknown error"}`, { keyboard: kb(NAV_HOME) });
     await clearSession(String(chatId));
