@@ -13,7 +13,16 @@ import { getCollection } from "./mongo.ts";
 import { sendMessage, sendPhotoOrLink, answerCallbackQuery, mainReplyKeyboard, type InlineKeyboard, type InlineButton } from "./telegramBot.ts";
 import { callSelfApi } from "./telegramSelfApi.ts";
 import { findOrCreateTelegramUser, type TelegramProfile } from "./auth/telegramAccount.ts";
+import { handleManualText, handleManualCallback, showManualHome } from "./telegramManualFlow.ts";
 import type { UserDoc } from "./types.ts";
+
+/** Manual Provider is soft-launched — live but admin-only for now, exactly
+ * like the website's version (the API itself enforces this via
+ * requireSoftLaunchAdmin; this just keeps the entry hidden for everyone
+ * else instead of showing a button that would only 403). */
+function isManualUnlocked(user: UserDoc): boolean {
+  return user.roles.includes("admin");
+}
 
 type SessionDoc = { _id: string; step: string; data: Record<string, unknown>; updatedAt: Date };
 
@@ -46,11 +55,12 @@ const BUTTON_COMMANDS: Record<string, string> = {
   "💼 balance": "/balance",
   "📦 my orders": "/orders",
   "🎁 refer & earn": "/refer",
+  "🤝 manual otp": "/manual",
   "❓ help": "/help",
 };
 
-async function sendMenu(chatId: number, greeting?: string) {
-  await sendMessage(chatId, greeting ?? "What would you like to do?", { replyKeyboard: mainReplyKeyboard() });
+async function sendMenu(chatId: number, greeting?: string, withManual = false) {
+  await sendMessage(chatId, greeting ?? "What would you like to do?", { replyKeyboard: mainReplyKeyboard({ withManual }) });
 }
 
 // ---- Buy flow ----
@@ -405,7 +415,24 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
     // anything else so the referrer earns from this user's first purchase.
     if (cmd === "/start" && parts[1]) await applyReferralCode(user, parts[1]);
     await clearSession(String(chatId));
-    await sendMenu(chatId, `👋 Welcome to <b>TenOTP</b>, ${from.first_name ?? "there"}!\n\nBuy virtual numbers, get OTPs, add funds, and earn referral commission — all right here.\n\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`);
+    const manual = isManualUnlocked(user);
+    await sendMenu(
+      chatId,
+      `👋 Welcome to <b>TenOTP</b>, ${from.first_name ?? "there"}!\n\n` +
+        `⚡ <b>Temp OTP</b> — instant virtual numbers, automatic\n` +
+        (manual ? `🤝 <b>Manual OTP</b> — real people fulfil it (buy or sell)\n` : "") +
+        `\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`,
+      manual,
+    );
+    return;
+  }
+  if (cmd === "/manual") {
+    if (!isManualUnlocked(user)) {
+      await sendMessage(chatId, "🤝 Manual OTP isn't available on your account yet.", { keyboard: kb(NAV_HOME) });
+      return;
+    }
+    await clearSession(String(chatId));
+    await showManualHome(chatId);
     return;
   }
   if (cmd === "/buy" || cmd === "/search") { await startBuyFlow(chatId); return; }
@@ -419,6 +446,9 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
   // Not a command — route by whatever step this chat is in.
   const session = await getSession(String(chatId));
   try {
+    // Manual Provider steps live in their own module — let it claim the
+    // message first if one of its flows is mid-way.
+    if (session.step.startsWith("mp_") && await handleManualText(chatId, user._id, roles, session.step, text)) return;
     if (session.step === "buy_country") { await handleCountrySearch(chatId, user._id, roles, text); return; }
     if (session.step === "buy_service") { await handleServiceSearch(chatId, user._id, roles, text); return; }
     if (session.step === "deposit_amount") { await createDeposit(chatId, user._id, roles, Number(text.trim().replace(/[₹,\s]/g, ""))); return; }
@@ -439,7 +469,12 @@ export async function handleCallback(chatId: number, callbackQueryId: string, fr
   await answerCallbackQuery(callbackQueryId);
 
   try {
-    if (data === "m:menu") { await clearSession(String(chatId)); await sendMenu(chatId); return; }
+    // Manual Provider buttons — gated the same way the menu entry is, so a
+    // stale button from before access changed can't be used either.
+    if ((data === "m:manual" || data.startsWith("mp")) && isManualUnlocked(user)) {
+      if (await handleManualCallback(chatId, user._id, roles, data)) return;
+    }
+    if (data === "m:menu") { await clearSession(String(chatId)); await sendMenu(chatId, undefined, isManualUnlocked(user)); return; }
     if (data === "m:buy" || data === "m:search") { await startBuyFlow(chatId); return; }
     if (data === "m:deposit") { await startDepositFlow(chatId); return; }
     if (data === "m:balance") { await showBalance(chatId, user._id, roles); return; }

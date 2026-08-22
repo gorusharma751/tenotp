@@ -30,11 +30,14 @@ export type InlineKeyboard = { inline_keyboard: InlineButton[][] };
  * which handleTextMessage maps back to the right command. */
 export type ReplyKeyboard = { keyboard: Array<Array<{ text: string; web_app?: { url: string } }>>; resize_keyboard: boolean; is_persistent: boolean };
 
-export function mainReplyKeyboard(): ReplyKeyboard {
+export function mainReplyKeyboard(opts?: { withManual?: boolean }): ReplyKeyboard {
   const base = process.env.FRONTEND_URL || "https://tenotp.vercel.app";
   return {
     keyboard: [
       [{ text: "🛒 Buy Number" }, { text: "🔍 Search Service" }],
+      // Manual Provider is soft-launched — only shown to accounts that can
+      // actually use it (see telegramBotFlow's isManualUnlocked).
+      ...(opts?.withManual ? [[{ text: "🤝 Manual OTP" }]] : []),
       [{ text: "💰 Deposit" }, { text: "💼 Balance" }],
       [{ text: "📦 My Orders" }, { text: "🎁 Refer & Earn" }],
       [{ text: "📱 Open App", web_app: { url: base } }, { text: "❓ Help" }],

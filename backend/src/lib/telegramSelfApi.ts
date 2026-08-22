@@ -9,7 +9,7 @@ const SELF_BASE = `http://localhost:${process.env.PORT || 8787}`;
 
 export class SelfApiError extends Error {}
 
-export async function callSelfApi<T>(userId: string, roles: string[], method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+export async function callSelfApi<T>(userId: string, roles: string[], method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
   const token = signSessionToken({ sub: userId, email: "", roles });
   const res = await fetch(`${SELF_BASE}${path}`, {
     method,
