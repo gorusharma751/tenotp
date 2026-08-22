@@ -12,7 +12,7 @@
 import { getCollection } from "./mongo.ts";
 import { sendMessage, sendPhotoOrLink, answerCallbackQuery, mainReplyKeyboard, type InlineKeyboard, type InlineButton } from "./telegramBot.ts";
 import { callSelfApi } from "./telegramSelfApi.ts";
-import { findOrCreateTelegramUser, type TelegramProfile } from "./auth/telegramAccount.ts";
+import { findOrCreateTelegramUser, linkTelegramToAccount, type TelegramProfile } from "./auth/telegramAccount.ts";
 import { handleManualText, handleManualCallback, showManualHome } from "./telegramManualFlow.ts";
 import type { UserDoc } from "./types.ts";
 
@@ -370,6 +370,44 @@ async function showReferrals(chatId: number, userId: string, roles: string[], us
   );
 }
 
+// ---- Link an existing website account ----
+async function startLink(chatId: number, user: UserDoc) {
+  if (user.telegramId && !user.email.endsWith("@telegram.local")) {
+    await sendMessage(chatId, `✅ Already linked to <b>${user.email}</b>.`, { keyboard: kb(NAV_HOME) });
+    return;
+  }
+  await setSession(String(chatId), "link_email", {});
+  await sendMessage(
+    chatId,
+    "🔗 <b>Link your website account</b>\n\nUsing the same account everywhere means one wallet, one order history — instead of a separate bot-only account.\n\nType the <b>email</b> you use on the website:",
+    { keyboard: kb(NAV_HOME) },
+  );
+}
+
+async function handleLinkEmail(chatId: number, email: string) {
+  await setSession(String(chatId), "link_password", { email: email.trim() });
+  await sendMessage(chatId, "🔑 Now type your <b>password</b>.\n\n(Delete the message after — Telegram keeps chat history.)", { keyboard: kb(NAV_HOME) });
+}
+
+async function handleLinkPassword(chatId: number, telegramId: string, password: string) {
+  const s = await getSession(String(chatId));
+  const email = s.data.email as string | undefined;
+  if (!email) { await sendMessage(chatId, "Start again with /link.", { keyboard: kb(NAV_HOME) }); return; }
+  try {
+    const linked = await linkTelegramToAccount(telegramId, email, password);
+    await clearSession(String(chatId));
+    await sendMenu(
+      chatId,
+      `✅ <b>Linked to ${linked.email}</b>\n\nThis chat now uses that account — same wallet, same orders as the website.\n\n💰 Balance: ₹${Number(linked.walletBalance ?? 0).toFixed(2)}`,
+      isManualUnlocked(linked),
+    );
+  } catch (err) {
+    console.error("[link] failed:", err instanceof Error ? err.message : err);
+    await setSession(String(chatId), "link_email", {});
+    await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Could not link"}\n\nType your email again, or /menu to stop.`, { keyboard: kb(NAV_HOME) });
+  }
+}
+
 const HELP_TEXT = [
   "<b>TenOTP bot — everything works right here in chat</b>",
   "",
@@ -379,6 +417,7 @@ const HELP_TEXT = [
   "💼 /balance — wallet balance",
   "📦 /orders — recent orders + check OTP",
   "🎁 /refer — your referral link &amp; earnings",
+  "🔗 /link — use your existing website account here",
   "🏠 /menu — main menu",
   "",
   "Use the buttons under the message box for one-tap access.",
@@ -421,7 +460,11 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
       `👋 Welcome to <b>TenOTP</b>, ${from.first_name ?? "there"}!\n\n` +
         `⚡ <b>Temp OTP</b> — instant virtual numbers, automatic\n` +
         (manual ? `🤝 <b>Manual OTP</b> — real people fulfil it (buy or sell)\n` : "") +
-        `\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`,
+        `\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}` +
+        // A fresh bot account is separate from any website account until
+        // it's linked — say so, rather than letting them wonder why their
+        // balance/orders look empty here.
+        (user.email.endsWith("@telegram.local") ? `\n\n🔗 Already have an account on the website? Send /link to use it here (same wallet &amp; orders).` : ""),
       manual,
     );
     return;
@@ -440,6 +483,7 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
   if (cmd === "/balance") { await showBalance(chatId, user._id, roles); return; }
   if (cmd === "/orders") { await showOrders(chatId, user._id, roles); return; }
   if (cmd === "/refer") { await showReferrals(chatId, user._id, roles, user); return; }
+  if (cmd === "/link") { await startLink(chatId, user); return; }
   if (cmd === "/help") { await sendMessage(chatId, HELP_TEXT, { keyboard: kb(NAV_HOME) }); return; }
   if (cmd === "/cancel") { await clearSession(String(chatId)); await sendMenu(chatId, "Cancelled."); return; }
 
@@ -453,6 +497,8 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
     if (session.step === "buy_service") { await handleServiceSearch(chatId, user._id, roles, text); return; }
     if (session.step === "deposit_amount") { await createDeposit(chatId, user._id, roles, Number(text.trim().replace(/[₹,\s]/g, ""))); return; }
     if (session.step === "deposit_utr") { await handleUtrSubmit(chatId, user._id, roles, text); return; }
+    if (session.step === "link_email") { await handleLinkEmail(chatId, text); return; }
+    if (session.step === "link_password") { await handleLinkPassword(chatId, String(from.id), text); return; }
   } catch (err) {
     await sendMessage(chatId, `❌ ${err instanceof Error ? err.message : "Something went wrong"}`, { keyboard: kb(NAV_HOME) });
     return;

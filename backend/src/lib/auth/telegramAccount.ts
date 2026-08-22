@@ -6,7 +6,7 @@
 // just finds the same account afterward.
 import crypto from "node:crypto";
 import { getCollection } from "../mongo.ts";
-import { hashPassword } from "./password.ts";
+import { hashPassword, verifyPassword } from "./password.ts";
 import type { UserDoc } from "../types.ts";
 
 async function generateReferralCode(users: Awaited<ReturnType<typeof getCollection<UserDoc>>>): Promise<string> {
@@ -52,4 +52,37 @@ export async function findOrCreateTelegramUser(tg: TelegramProfile): Promise<Use
   };
   await users.insertOne(doc);
   return doc;
+}
+
+/** Attaches this Telegram id to an EXISTING website account after checking
+ * its password — without this, opening the bot silently creates a second,
+ * empty account and the same person ends up with two wallets ("admin hai
+ * kaun, mera Telegram toh dikhna chahiye"). Any orders/balance the
+ * throwaway bot account picked up first are moved over so nothing is lost.
+ */
+export async function linkTelegramToAccount(telegramId: string, email: string, password: string): Promise<UserDoc> {
+  const users = await getCollection<UserDoc>("users");
+  const target = await users.findOne({ emailLower: email.trim().toLowerCase() });
+  if (!target) throw new Error("No account with that email");
+  const ok = await verifyPassword(password, target.passwordHash);
+  if (!ok) throw new Error("Wrong password");
+  if (target.status === "blocked") throw new Error("This account is blocked");
+  if (target.telegramId && target.telegramId !== telegramId) throw new Error("That account is already linked to a different Telegram user");
+
+  const throwaway = await users.findOne({ telegramId });
+  if (throwaway && throwaway._id !== target._id) {
+    // Fold the auto-created bot account into the real one, then free the
+    // telegramId so the unique index doesn't reject the link below.
+    const balance = Number(throwaway.walletBalance ?? 0);
+    await users.updateOne({ _id: throwaway._id }, { $unset: { telegramId: "" }, $set: { walletBalance: 0, status: "blocked", updatedAt: new Date() } });
+    if (balance > 0) await users.updateOne({ _id: target._id }, { $inc: { walletBalance: balance } });
+    for (const coll of ["orders", "wallet_tx", "manual_provider_requests"]) {
+      try {
+        await (await getCollection(coll)).updateMany({ userId: throwaway._id } as never, { $set: { userId: target._id } } as never);
+      } catch { /* best-effort — a failed move must not abort the link */ }
+    }
+  }
+
+  await users.updateOne({ _id: target._id }, { $set: { telegramId, updatedAt: new Date() } });
+  return (await users.findOne({ _id: target._id }))!;
 }
