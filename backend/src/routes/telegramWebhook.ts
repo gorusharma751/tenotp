@@ -10,7 +10,7 @@ export const telegramWebhookRouter = Router();
 
 type TelegramUpdate = {
   message?: { chat: { id: number }; from?: { id: number; first_name?: string; last_name?: string; username?: string }; text?: string };
-  callback_query?: { id: string; from: { id: number; first_name?: string; last_name?: string; username?: string }; message?: { chat: { id: number } }; data?: string };
+  callback_query?: { id: string; from: { id: number; first_name?: string; last_name?: string; username?: string }; message?: { chat: { id: number }; message_id?: number }; data?: string };
   inline_query?: { id: string; from: { id: number; first_name?: string; last_name?: string; username?: string }; query: string };
 };
 
@@ -37,7 +37,7 @@ telegramWebhookRouter.post("/webhook", async (req, res) => {
     if (update.callback_query) {
       const cq = update.callback_query;
       const chatId = cq.message?.chat.id;
-      if (chatId && cq.data) await handleCallback(chatId, cq.id, cq.from, cq.data);
+      if (chatId && cq.data) await handleCallback(chatId, cq.id, cq.from, cq.data, cq.message?.message_id);
       return;
     }
 

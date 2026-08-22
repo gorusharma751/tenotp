@@ -19,7 +19,7 @@ async function callTelegramApi(method: string, payload: Record<string, unknown>)
   return body;
 }
 
-export type InlineButton = { text: string; callback_data?: string; web_app?: { url: string } };
+export type InlineButton = { text: string; callback_data?: string; url?: string; web_app?: { url: string } };
 export type InlineKeyboard = { inline_keyboard: InlineButton[][] };
 
 /** The persistent button panel that sits under the message box — "jaise

@@ -10,7 +10,7 @@
 // Every reply ends with the buttons for whatever can sensibly happen next,
 // so the flow never dead-ends on a message with nothing to tap.
 import { getCollection } from "./mongo.ts";
-import { sendMessage, sendPhotoOrLink, answerCallbackQuery, answerInlineQuery, mainReplyKeyboard, type InlineKeyboard, type InlineButton, type InlineResult } from "./telegramBot.ts";
+import { sendMessage, sendPhotoOrLink, answerCallbackQuery, answerInlineQuery, editMessageText, mainReplyKeyboard, type InlineKeyboard, type InlineButton, type InlineResult } from "./telegramBot.ts";
 import { callSelfApi } from "./telegramSelfApi.ts";
 import { findOrCreateTelegramUser, linkTelegramToAccount, type TelegramProfile } from "./auth/telegramAccount.ts";
 import { handleManualText, handleManualCallback, showManualHome } from "./telegramManualFlow.ts";
@@ -69,19 +69,37 @@ async function sendMenu(chatId: number, greeting?: string, withManual = false) {
  * numbers), sellers get the seller panel. Everyone else skips the question
  * entirely, since "buyer" is the only thing they can be. */
 async function sendWelcome(chatId: number, user: UserDoc, firstName?: string) {
-  const manual = isManualUnlocked(user);
-  const unlinked = user.email.endsWith("@telegram.local")
-    ? `\n\n🔗 Already have an account on the website? Send /link to use it here (same wallet &amp; orders).`
-    : "";
-  const balance = `\n\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`;
+  const site = process.env.FRONTEND_URL || "https://tenotp.vercel.app";
+  // A chat that has never been linked is sitting on an auto-created,
+  // empty account. Rather than quietly carrying on as that account, offer
+  // the two real ways in first — sign in to an existing website account,
+  // or go make one — with "continue as guest" as the explicit third
+  // choice instead of the silent default.
+  if (user.email.endsWith("@telegram.local")) {
+    await sendMessage(
+      chatId,
+      `👋 Welcome to <b>TenOTP</b>, ${firstName ?? "there"}!\n\n` +
+        `To use your wallet and orders here, sign in to your TenOTP account:`,
+      {
+        keyboard: kb(
+          [{ text: "🔑 Sign in with email & password", callback_data: "auth:login" }],
+          [{ text: "🌐 Create an account on the website", web_app: { url: `${site}/signup` } }],
+          [{ text: "👀 Just browsing — continue as guest", callback_data: "auth:guest" }],
+        ),
+      },
+    );
+    return;
+  }
 
+  const manual = isManualUnlocked(user);
+  const balance = `\n\n💰 Balance: ₹${Number(user.walletBalance ?? 0).toFixed(2)}`;
   if (!manual) {
-    await sendMenu(chatId, `👋 Welcome to <b>TenOTP</b>, ${firstName ?? "there"}!${balance}${unlinked}`, false);
+    await sendMenu(chatId, `👋 Welcome back, ${firstName ?? "there"}!${balance}`, false);
     return;
   }
   await sendMessage(
     chatId,
-    `👋 Welcome to <b>TenOTP</b>, ${firstName ?? "there"}!${balance}${unlinked}\n\nWhich side are you on?`,
+    `👋 Welcome back, ${firstName ?? "there"}!${balance}\n\nWhich side are you on?`,
     { keyboard: kb([{ text: "🛍 I'm a Buyer", callback_data: "role:buyer" }], [{ text: "🧑‍💼 I'm a Seller", callback_data: "role:seller" }]) },
   );
 }
@@ -176,7 +194,12 @@ async function startBuyFlow(chatId: number, userId: string, roles: string[]) {
   await showCountryPage(chatId, 0);
 }
 
-async function showCountryPage(chatId: number, page: number) {
+/** Paging replaces the list in place rather than posting another copy of
+ * it — "next pe click karte hain to bot same msg ko edit karne ki jagah ek
+ * pura naya msg bhejta hai". editMessageText is only possible when we know
+ * which message the button belonged to, so callers pass messageId when the
+ * action came from a button; a fresh command still sends a new message. */
+async function showCountryPage(chatId: number, page: number, messageId?: number) {
   const s = await getSession(String(chatId));
   // Deduped again on read, not just when first loaded: a session started
   // before this shipped still holds the raw per-server list, and searching
@@ -193,15 +216,17 @@ async function showCountryPage(chatId: number, page: number) {
   }
   const slice = list.slice(page * PAGE, page * PAGE + PAGE);
   await setSession(String(chatId), "buy_country", { ...s.data, page });
+  const pages = Math.ceil(list.length / PAGE);
   const header = q ? `🌍 <b>Step 1 of 3</b> — ${list.length} match(es) for "${q}"` : `🌍 <b>Step 1 of 3</b> — pick a country (${list.length} available)`;
-  await sendMessage(chatId, `${header}\n\n💡 Or just type a country name to search.`, {
-    keyboard: kb(
-      ...slice.map((c) => [{ text: `${c.flag} ${c.name} — from ₹${c.priceFrom}`, callback_data: `cty:${c.code}` }]),
-      pageRow("cpg", page, list.length),
-      ...(q ? [[{ text: "🌍 Show all", callback_data: "cclr" }]] : []),
-      NAV_HOME,
-    ),
-  });
+  const body = `${header}${pages > 1 ? `  ·  page ${page + 1}/${pages}` : ""}\n\n⌨️ <b>Just type</b> a country name to search — e.g. "india", "usa".`;
+  const keyboard = kb(
+    ...slice.map((c) => [{ text: `${c.flag} ${c.name} — from ₹${c.priceFrom}`, callback_data: `cty:${c.code}` }]),
+    pageRow("cpg", page, list.length),
+    ...(q ? [[{ text: "🌍 Show all", callback_data: "cclr" }]] : []),
+    NAV_HOME,
+  );
+  if (messageId) await editMessageText(chatId, messageId, body, keyboard);
+  else await sendMessage(chatId, body, { keyboard });
 }
 
 async function handleCountrySearch(chatId: number, text: string) {
@@ -234,7 +259,7 @@ async function loadServices(chatId: number, userId: string, roles: string[], cou
   await showServicePage(chatId, 0);
 }
 
-async function showServicePage(chatId: number, page: number) {
+async function showServicePage(chatId: number, page: number, messageId?: number) {
   const s = await getSession(String(chatId));
   const country = s.data.country as CountryRow | undefined;
   const all = (s.data.services as ServiceRow[] | undefined) ?? [];
@@ -249,15 +274,17 @@ async function showServicePage(chatId: number, page: number) {
   }
   const slice = list.slice(page * PAGE, page * PAGE + PAGE);
   await setSession(String(chatId), "buy_service", { ...s.data, page });
+  const pages = Math.ceil(list.length / PAGE);
   const header = q ? `🔍 <b>Step 2 of 3</b> — ${list.length} match(es) for "${q}"` : `🔍 <b>Step 2 of 3</b> — ${country.flag} ${country.name} · ${list.length} services`;
-  await sendMessage(chatId, `${header}\n\n💡 Or type a service name to search.`, {
-    keyboard: kb(
-      ...slice.map((r) => [{ text: `${r.name} · ₹${r.price} · ${r.stock} left`, callback_data: `svc:${all.indexOf(r)}` }]),
-      pageRow("spg", page, list.length),
-      ...(q ? [[{ text: "📋 Show all", callback_data: "sclr" }]] : []),
-      [{ text: "🌍 Change country", callback_data: "m:buy" }, ...NAV_HOME],
-    ),
-  });
+  const body = `${header}${pages > 1 ? `  ·  page ${page + 1}/${pages}` : ""}\n\n⌨️ <b>Just type</b> a service name to search — e.g. "whatsapp", "insta".`;
+  const keyboard = kb(
+    ...slice.map((r) => [{ text: `${r.name} · ₹${r.price} · ${r.stock} left`, callback_data: `svc:${all.indexOf(r)}` }]),
+    pageRow("spg", page, list.length),
+    ...(q ? [[{ text: "📋 Show all", callback_data: "sclr" }]] : []),
+    [{ text: "🌍 Change country", callback_data: "m:buy" }, ...NAV_HOME],
+  );
+  if (messageId) await editMessageText(chatId, messageId, body, keyboard);
+  else await sendMessage(chatId, body, { keyboard });
 }
 
 async function handleServiceSearch(chatId: number, text: string) {
@@ -537,6 +564,24 @@ async function handleLinkPassword(chatId: number, telegramId: string, password: 
   }
 }
 
+/** Support links come from the same admin-managed settings the website's
+ * footer/contact buttons use, so changing them in the admin panel updates
+ * the bot too — nothing hardcoded here to go stale. */
+async function sendHelp(chatId: number) {
+  let contactRow: InlineButton[] = [];
+  try {
+    const links = await callSelfApi<{ telegramGroup: string; telegramSupport: string; whatsapp: string }>("", [], "GET", "/api/public/contact-links");
+    if (links.telegramSupport) contactRow.push({ text: "🆘 Contact support", url: links.telegramSupport } as InlineButton);
+    if (links.telegramGroup) contactRow.push({ text: "👥 Join group", url: links.telegramGroup } as InlineButton);
+    if (!contactRow.length && links.whatsapp) contactRow.push({ text: "💬 WhatsApp", url: links.whatsapp } as InlineButton);
+  } catch { /* best-effort — help still works without the links */ }
+
+  const text = contactRow.length
+    ? `${HELP_TEXT}\n\n🆘 <b>Need help?</b> Use the buttons below to reach us.`
+    : `${HELP_TEXT}`;
+  await sendMessage(chatId, text, { keyboard: kb(...(contactRow.length ? [contactRow] : []), NAV_HOME) });
+}
+
 const HELP_TEXT = [
   "<b>TenOTP bot — everything works right here in chat</b>",
   "",
@@ -624,7 +669,7 @@ export async function handleTextMessage(chatId: number, from: TelegramProfile, t
   if (cmd === "/orders") { await showOrders(chatId, user._id, roles); return; }
   if (cmd === "/refer") { await showReferrals(chatId, user._id, roles, user); return; }
   if (cmd === "/link") { await startLink(chatId, user); return; }
-  if (cmd === "/help") { await sendMessage(chatId, HELP_TEXT, { keyboard: kb(NAV_HOME) }); return; }
+  if (cmd === "/help") { await sendHelp(chatId); return; }
   if (cmd === "/cancel") { await clearSession(String(chatId)); await sendMenu(chatId, "Cancelled."); return; }
 
   // Not a command — route by whatever step this chat is in.
@@ -696,7 +741,7 @@ export async function handleInlineQuery(inlineQueryId: string, from: TelegramPro
   await answerInlineQuery(inlineQueryId, results);
 }
 
-export async function handleCallback(chatId: number, callbackQueryId: string, from: TelegramProfile, data: string) {
+export async function handleCallback(chatId: number, callbackQueryId: string, from: TelegramProfile, data: string, messageId?: number) {
   const user = await findOrCreateTelegramUser(from);
   const roles = user.roles;
   // Ack immediately so Telegram stops showing the button's loading spinner —
@@ -708,6 +753,12 @@ export async function handleCallback(chatId: number, callbackQueryId: string, fr
     // stale button from before access changed can't be used either.
     if ((data === "m:manual" || data.startsWith("mp")) && isManualUnlocked(user)) {
       if (await handleManualCallback(chatId, user._id, roles, data)) return;
+    }
+    if (data === "auth:login") { await startLink(chatId, user); return; }
+    if (data === "auth:guest") {
+      await clearSession(String(chatId));
+      await sendMenu(chatId, `👀 Continuing as a guest.\n\nYou can sign in any time with /link to bring your website wallet and orders here.`, isManualUnlocked(user));
+      return;
     }
     if (data === "role:buyer") { await clearSession(String(chatId)); await sendBuyerMenu(chatId, user); return; }
     if (data === "role:seller") {
@@ -724,11 +775,11 @@ export async function handleCallback(chatId: number, callbackQueryId: string, fr
     if (data === "m:balance") { await showBalance(chatId, user._id, roles); return; }
     if (data === "m:orders") { await showOrders(chatId, user._id, roles); return; }
     if (data === "m:refer") { await showReferrals(chatId, user._id, roles, user); return; }
-    if (data === "m:help") { await sendMessage(chatId, HELP_TEXT, { keyboard: kb(NAV_HOME) }); return; }
-    if (data.startsWith("cpg:")) { await showCountryPage(chatId, Number(data.slice(4))); return; }
-    if (data.startsWith("spg:")) { await showServicePage(chatId, Number(data.slice(4))); return; }
-    if (data === "cclr") { const s = await getSession(String(chatId)); await setSession(String(chatId), "buy_country", { ...s.data, q: "", page: 0 }); await showCountryPage(chatId, 0); return; }
-    if (data === "sclr") { const s = await getSession(String(chatId)); await setSession(String(chatId), "buy_service", { ...s.data, q: "", page: 0 }); await showServicePage(chatId, 0); return; }
+    if (data === "m:help") { await sendHelp(chatId); return; }
+    if (data.startsWith("cpg:")) { await showCountryPage(chatId, Number(data.slice(4)), messageId); return; }
+    if (data.startsWith("spg:")) { await showServicePage(chatId, Number(data.slice(4)), messageId); return; }
+    if (data === "cclr") { const s = await getSession(String(chatId)); await setSession(String(chatId), "buy_country", { ...s.data, q: "", page: 0 }); await showCountryPage(chatId, 0, messageId); return; }
+    if (data === "sclr") { const s = await getSession(String(chatId)); await setSession(String(chatId), "buy_service", { ...s.data, q: "", page: 0 }); await showServicePage(chatId, 0, messageId); return; }
     if (data.startsWith("cty:")) { await handleCountryPick(chatId, user._id, roles, data.slice(4)); return; }
     if (data.startsWith("svc:")) { await handleServicePick(chatId, user._id, roles, Number(data.slice(4))); return; }
     if (data === "buy_confirm") { await handleBuyConfirm(chatId, user._id, roles); return; }
