@@ -288,7 +288,7 @@ otpRouter.post("/status", requireAuth, async (req, res) => {
   try {
     const orderId = String(req.body?.orderId ?? "");
     if (!orderId) throw new Error("Order id required");
-    const orders = await getCollection<{ _id: string; userId: string; operator?: string | null; otp?: string | null; status: string; providerId?: string | null; createdAt: Date }>("orders");
+    const orders = await getCollection<{ _id: string; userId: string; operator?: string | null; otp?: string | null; status: string; providerId?: string | null; price: number; createdAt: Date }>("orders");
     const order = await orders.findOne({ _id: orderId });
     if (!order) throw new Error("Order not found");
     if (order.userId !== req.auth.userId && !req.auth.roles.includes("admin")) throw new Error("Forbidden");
@@ -328,6 +328,10 @@ otpRouter.post("/status", requireAuth, async (req, res) => {
           await recordProviderSpeed(order.providerId, (Date.now() - order.createdAt.getTime()) / 1000);
         } catch { /* best-effort — never block handing the OTP back over a stats write */ }
       }
+      try {
+        const { creditReferralCommission } = await import("../lib/db/referralCommission.ts");
+        await creditReferralCommission(order.userId, Number(order.price), orderId);
+      } catch { /* best-effort — never block handing the OTP back over a commission credit */ }
       return res.json({ status: "received", otp: status.code });
     }
     res.json({ status: status.status, otp: null });
