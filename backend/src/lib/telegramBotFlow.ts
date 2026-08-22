@@ -178,7 +178,11 @@ async function startBuyFlow(chatId: number, userId: string, roles: string[]) {
 
 async function showCountryPage(chatId: number, page: number) {
   const s = await getSession(String(chatId));
-  const all = (s.data.countries as CountryRow[] | undefined) ?? [];
+  // Deduped again on read, not just when first loaded: a session started
+  // before this shipped still holds the raw per-server list, and searching
+  // reuses whatever the session has — so without this, anyone mid-flow
+  // keeps seeing "India, India, India…" forever.
+  const all = dedupeCountries((s.data.countries as CountryRow[] | undefined) ?? []);
   const q = String(s.data.q ?? "");
   const list = rank(all, q.toLowerCase(), (c) => c.name);
   if (!list.length) {
