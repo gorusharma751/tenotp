@@ -15,6 +15,21 @@ import type { OrderDoc } from "../lib/db/wallet.ts";
 
 export const telegramWebhookRouter = Router();
 
+// TEMPORARY — diagnosing why TELEGRAM_BOT_TOKEN/TELEGRAM_WEBHOOK_SECRET
+// don't seem to reach the running process despite being set in Render's
+// dashboard. Reports presence + a short fingerprint only, never the full
+// secret. Remove once this is figured out.
+telegramWebhookRouter.get("/debug-env", (_req, res) => {
+  const tok = process.env.TELEGRAM_BOT_TOKEN ?? "";
+  const sec = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
+  res.json({
+    TELEGRAM_BOT_TOKEN: tok ? { len: tok.length, first6: tok.slice(0, 6), last4: tok.slice(-4) } : null,
+    TELEGRAM_WEBHOOK_SECRET: sec ? { len: sec.length, first6: sec.slice(0, 6), last4: sec.slice(-4) } : null,
+    FRONTEND_URL: process.env.FRONTEND_URL ?? null,
+    NODE_ENV: process.env.NODE_ENV ?? null,
+  });
+});
+
 type TelegramMessage = {
   chat: { id: number };
   from?: { id: number; first_name?: string; last_name?: string; username?: string };
